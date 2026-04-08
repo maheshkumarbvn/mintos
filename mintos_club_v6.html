@@ -55,8 +55,8 @@ try {
     firebase.initializeApp(FIREBASE_CONFIG);
     fbDb = firebase.database();
     fbReady = true;
-    console.log("\u2705 Firebase connected");
-  } else { console.log("\u26A0\uFE0F Firebase not configured - localStorage only"); }
+    console.log("✅ Firebase connected");
+  } else { console.log("⚠️ Firebase not configured - localStorage only"); }
 } catch(e) { console.warn("Firebase init error:", e); }
 
 const DEVICE_ID = (() => { let id = localStorage.getItem("mts_device_id"); if (!id) { id = "d_"+Date.now().toString(36)+Math.random().toString(36).substr(2,4); localStorage.setItem("mts_device_id",id); } return id; })();
@@ -69,6 +69,47 @@ const S = {
   async set(k,v) {
     try { localStorage.setItem("mts_s_"+k,JSON.stringify(v)); } catch(e) {}
     if (fbReady) { try { await fbDb.ref("mintos/"+k).set(v); } catch(e) {} }
+    return true;
+  },
+  // ===== Bragboard per-post operations =====
+  // Bragboard is stored as mintos/mts_bragboard/{postId} -> post object
+  // The app keeps a local array in data.bragboard for rendering; these helpers
+  // sync individual posts to Firebase without rewriting the whole collection.
+  async bragGetAll() {
+    if (fbReady) {
+      try {
+        const snap = await fbDb.ref("mintos/mts_bragboard").once("value");
+        if (snap.exists()) {
+          const obj = snap.val() || {};
+          const arr = Object.values(obj).sort((a,b) => (b.ts||0) - (a.ts||0));
+          localStorage.setItem("mts_s_mts_bragboard", JSON.stringify(arr));
+          return arr;
+        }
+      } catch(e) {}
+    }
+    try { const r = localStorage.getItem("mts_s_mts_bragboard"); return r ? JSON.parse(r) : []; } catch(e) { return []; }
+  },
+  async bragSetPost(post) {
+    // Update local cache array
+    try {
+      const r = localStorage.getItem("mts_s_mts_bragboard");
+      const arr = r ? JSON.parse(r) : [];
+      const idx = arr.findIndex(p => p.id === post.id);
+      if (idx >= 0) arr[idx] = post; else arr.unshift(post);
+      arr.sort((a,b) => (b.ts||0) - (a.ts||0));
+      localStorage.setItem("mts_s_mts_bragboard", JSON.stringify(arr));
+    } catch(e) {}
+    if (fbReady) { try { await fbDb.ref("mintos/mts_bragboard/"+post.id).set(post); } catch(e) {} }
+    return true;
+  },
+  async bragDeletePost(postId) {
+    try {
+      const r = localStorage.getItem("mts_s_mts_bragboard");
+      const arr = r ? JSON.parse(r) : [];
+      const filtered = arr.filter(p => p.id !== postId);
+      localStorage.setItem("mts_s_mts_bragboard", JSON.stringify(filtered));
+    } catch(e) {}
+    if (fbReady) { try { await fbDb.ref("mintos/mts_bragboard/"+postId).remove(); } catch(e) {} }
     return true;
   },
   async mergeAnalytics(fn) {
@@ -290,11 +331,24 @@ function App() {
     window.addEventListener("beforeunload",h);return()=>window.removeEventListener("beforeunload",h);
   },[user]);
 
+// ===== Periodic Firebase refresh =====
   // Periodic Firebase refresh
   useEffect(()=>{
     if(!fbReady)return;
     const iv=setInterval(async()=>{try{
-      for(const k of["reviews","appreciations","recordings","analytics","meetings","feedback","photos","passwordHistory","users","bragboard"]){
+      // Bragboard is stored per-post under mintos/mts_bragboard/{postId}
+      // Fetch the whole collection and rebuild the array
+      try {
+        const snap = await fbDb.ref("mintos/mts_bragboard").once("value");
+        const obj = snap.exists() ? (snap.val() || {}) : {};
+        const arr = Object.values(obj).sort((a,b) => (b.ts||0) - (a.ts||0));
+        setData(p => {
+          if (JSON.stringify(p.bragboard) !== JSON.stringify(arr)) return {...p, bragboard: arr};
+          return p;
+        });
+      } catch(e) {}
+      // Other keys still use the single-blob format
+      for(const k of["reviews","appreciations","recordings","analytics","meetings","feedback","photos","passwordHistory","users"]){
         const snap=await fbDb.ref("mintos/mts_"+k).once("value");
         if(snap.exists()){const val=snap.val();setData(p=>{if(JSON.stringify(p[k])!==JSON.stringify(val))return{...p,[k]:val};return p;});}
       }
@@ -358,7 +412,7 @@ function App() {
   const navPages=[
     {id:"home",icon:"\ud83c\udfe0",label:"Home",roles:["kid","parent","admin"]},
     {id:"team",icon:"\ud83d\udc65",label:"Team",roles:["kid","parent","admin"]},
-    {id:"bragboard",icon:"\ud83e\udd29",label:"Brag Board",roles:["kid","parent","admin"]},
+    {id:"bragboard",icon:"\ud83e\udd29",label:"Jar of JOYs",roles:["kid","parent","admin"]},
     {id:"agenda",icon:"\ud83d\udccb",label:"Agenda",roles:["kid","parent","admin"]},
     {id:"meetings",icon:"\ud83d\udcc5",label:"Meetings",roles:["kid","parent","admin"]},
     {id:"reviews",icon:"\u2b50",label:"Reviews",roles:["kid","parent","admin"]},
@@ -912,7 +966,7 @@ function WallOfFamePage({data}) {
 
   return (<div style={{animation:"fadeIn .4s"}}>
     <h1 style={{fontWeight:900,fontSize:26,color:"#1b7a1b",marginBottom:12}}>🏆 Wall of Fame 🏆</h1>
-    <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>{[{id:"kids",label:"🎮 Kids Fun Board"},{id:"parents",label:"📊 Parents Dashboard"},{id:"stories",label:"🌈 Growth Stories"},{id:"trends",label:"📈 Growth Trend Charts"},{id:"bragstats",label:"🤩 Brag Highlights"}].map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 18px",borderRadius:10,border:"2px solid "+(tab===t.id?"#3da33d":"#d1fae5"),background:tab===t.id?"#3da33d":"#fff",color:tab===t.id?"#fff":"#6b7280",fontFamily:"inherit",fontSize:13,fontWeight:700,cursor:"pointer"}}>{t.label}</button>)}</div>
+    <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>{[{id:"kids",label:"🎮 Kids Fun Board"},{id:"parents",label:"📊 Parents Dashboard"},{id:"stories",label:"🌈 Growth Stories"},{id:"trends",label:"📈 Growth Trend Charts"},{ id:"bragstats", label:"🌿 Joys in the Jar" }].map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 18px",borderRadius:10,border:"2px solid "+(tab===t.id?"#3da33d":"#d1fae5"),background:tab===t.id?"#3da33d":"#fff",color:tab===t.id?"#fff":"#6b7280",fontFamily:"inherit",fontSize:13,fontWeight:700,cursor:"pointer"}}>{t.label}</button>)}</div>
 
     {tab==="kids" && <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
       {badges.map(b => {const earners=members.filter(m=>b.ck(m.name));return <div key={b.t} style={{background:"#fff",borderRadius:14,padding:16,textAlign:"center",boxShadow:"0 2px 12px rgba(30,120,30,.08)"}}>
@@ -949,7 +1003,7 @@ function WallOfFamePage({data}) {
       <GrowthTrendsAllUsers members={members} recordings={recordings} reviews={reviews} appreciations={appreciations} tasks={tasks||DEF_TASKS} analytics={data.analytics} users={data.users||[]} />
     </Card>}
 
-    {tab==="bragstats" && <Card title="😎 Brag Board Highlights">
+    {tab==="bragstats" && <Card title="😎 Highlights">
       <BragBoardStats bragboard={data.bragboard||[]} members={members} />
     </Card>}
   </div>);
@@ -1622,13 +1676,16 @@ function FeedbackPage({data, saveKey, user, showToast}) {
   </div>);
 }
 
-// ===== MEETINGS TRACKER PAGE =====
+// ===== MEETINGS PAGE FOR ALL USERS =====
 function MeetingsPage({data, saveKey, user, showToast, track}) {
   const meetings = data.meetings || [];
   const isAdmin = user.role === "admin";
   const [form, setForm] = useState({date:"",time:"",location:"",participants:"",notes:"",summary:"",week:"",recordingLink:""});
   const [showAdd, setShowAdd] = useState(false);
   const [editIdx, setEditIdx] = useState(null);
+  const [expanded, setExpanded] = useState({}); // track which meetings are expanded
+
+  const toggleExpand = (id) => setExpanded(prev => ({...prev, [id]: !prev[id]}));
 
   const addMeeting = async () => {
     if (!form.date) { showToast("Date required!","err"); return; }
@@ -1637,9 +1694,39 @@ function MeetingsPage({data, saveKey, user, showToast, track}) {
     await saveKey("meetings", updated);
     setForm({date:"",time:"",location:"",participants:"",notes:"",summary:"",week:"",recordingLink:""});
     setShowAdd(false); setEditIdx(null);
-    showToast(editIdx!==null?"Meeting updated!":"Meeting added! \ud83d\udcc5");
+    showToast(editIdx!==null?"Meeting updated!":"Meeting added! 📅");
     track("meeting", form.date);
   };
+
+  // Handle paste for rich content (HTML, images, tables)
+  const handleRichPaste = (e, field) => {
+    e.preventDefault();
+    const cd = e.clipboardData || window.clipboardData;
+    // Handle pasted images
+    const items = cd.items ? Array.from(cd.items) : [];
+    const imageItem = items.find(it => it.type && it.type.indexOf("image") === 0);
+    if (imageItem) {
+      const file = imageItem.getAsFile();
+      const reader = new FileReader();
+      reader.onload = ev => {
+        document.execCommand("insertHTML", false, `<img src="${ev.target.result}" style="max-width:100%;border-radius:6px;margin:4px 0;" />`);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    // Prefer HTML (preserves tables, formatting) over plain text
+    const html = cd.getData("text/html");
+    const text = cd.getData("text/plain");
+    if (html) {
+      // Basic sanitize: strip script/style tags
+      const clean = html.replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<style[\s\S]*?<\/style>/gi,"");
+      document.execCommand("insertHTML", false, clean);
+    } else {
+      document.execCommand("insertText", false, text);
+    }
+  };
+
+  const richEditorStyle = {width:"100%",minHeight:120,padding:12,border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:13,outline:"none",marginBottom:8,background:"#fff",lineHeight:1.7,overflowY:"auto",maxHeight:400};
 
   return (<div style={{animation:"popIn .4s ease"}}>
     <h1 style={{fontWeight:900,fontSize:24,color:"#1b7a1b",marginBottom:4}}>💬 Meetings Tracker</h1>
@@ -1647,7 +1734,7 @@ function MeetingsPage({data, saveKey, user, showToast, track}) {
 
     {isAdmin && !showAdd && <Btn onClick={()=>{setShowAdd(true);setEditIdx(null);}} style={{marginBottom:14}}>➕ Add Meeting</Btn>}
 
-    {showAdd && isAdmin && <Card title={editIdx!==null?"✍️ Edit Meeting":"\u2795 New Meeting"} bg="#fafff5" border="#6fcf6f">
+    {showAdd && isAdmin && <Card title={editIdx!==null?"✍️ Edit Meeting":"➕ New Meeting"} bg="#fafff5" border="#6fcf6f">
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
         <div><label style={{fontSize:11,fontWeight:700,color:"#888"}}>Date</label><Inp type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} /></div>
         <div><label style={{fontSize:11,fontWeight:700,color:"#888"}}>Time</label><Inp type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})} /></div>
@@ -1666,16 +1753,28 @@ function MeetingsPage({data, saveKey, user, showToast, track}) {
             if(selected) ps=ps.filter(p=>p!==(u.display||u.u));
             else ps.push(u.display||u.u);
             setForm({...form,participants:ps.join(", ")});
-          }} style={{padding:"4px 10px",borderRadius:20,border:selected?"2px solid #3da33d":"2px solid #e5e7eb",background:selected?"#d1fae5":"#fff",color:selected?"#1b7a1b":"#6b7280",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:".15s"}}>{u.emoji||"\ud83d\udc64"} {u.display||u.u} {selected?"\u2713":""}</button>;
+          }} style={{padding:"4px 10px",borderRadius:20,border:selected?"2px solid #3da33d":"2px solid #e5e7eb",background:selected?"#d1fae5":"#fff",color:selected?"#1b7a1b":"#6b7280",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:".15s"}}>{u.emoji||"👤"} {u.display||u.u} {selected?"✓":""}</button>;
         })}
       </div>
       <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Recording Link (tl;dv or other)</label>
       <Inp value={form.recordingLink} onChange={e=>setForm({...form,recordingLink:e.target.value})} placeholder="https://tldv.io/..." />
+
       <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Meeting Notes / Minutes (supports rich text, tables, images)</label>
-      <div style={{fontSize:10,color:"#999",marginBottom:4}}>\ud83d\udca1 Tip: Paste tables from Excel/Sheets, paste images directly, or type formatted notes. Use <b>bold</b>, <i>italic</i>, lists etc.</div>
-      <div contentEditable suppressContentEditableWarning style={{width:"100%",minHeight:120,padding:12,border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:13,outline:"none",marginBottom:8,background:"#fff",lineHeight:1.7,overflowY:"auto",maxHeight:400}} onPaste={e=>{e.preventDefault();const text=(e.clipboardData||window.clipboardData).getData("text/plain");document.execCommand("insertText",false,text);}} onBlur={e=>setForm({...form,notes:e.currentTarget.innerText})} dangerouslySetInnerHTML={{__html:(form.notes||"").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>")}} />
-      <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Minutes of Meeting Summary (rich text)</label>
-      <div contentEditable suppressContentEditableWarning style={{width:"100%",minHeight:80,padding:12,border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:13,outline:"none",marginBottom:8,background:"#fff",lineHeight:1.7,overflowY:"auto",maxHeight:300}} onPaste={e=>{e.preventDefault();const text=(e.clipboardData||window.clipboardData).getData("text/plain");document.execCommand("insertText",false,text);}} onBlur={e=>setForm({...form,summary:e.currentTarget.innerText})} dangerouslySetInnerHTML={{__html:(form.summary||"").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>")}} />
+      <div style={{fontSize:10,color:"#999",marginBottom:4}}>💡 Tip: Paste tables from Excel/Sheets, paste images directly, or type formatted notes.</div>
+      <div contentEditable suppressContentEditableWarning
+        style={richEditorStyle}
+        onPaste={e=>handleRichPaste(e,"notes")}
+        onBlur={e=>setForm({...form,notes:e.currentTarget.innerHTML})}
+        dangerouslySetInnerHTML={{__html:form.notes||""}} />
+
+      <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Minutes of Meeting Summary (supports rich text, tables, images)</label>
+      <div style={{fontSize:10,color:"#999",marginBottom:4}}>💡 Tip: Paste tables, images, or formatted content directly.</div>
+      <div contentEditable suppressContentEditableWarning
+        style={{...richEditorStyle,minHeight:80,maxHeight:300}}
+        onPaste={e=>handleRichPaste(e,"summary")}
+        onBlur={e=>setForm({...form,summary:e.currentTarget.innerHTML})}
+        dangerouslySetInnerHTML={{__html:form.summary||""}} />
+
       <div style={{display:"flex",gap:8}}>
         <Btn onClick={addMeeting}>💾 Save Meeting</Btn>
         <Btn onClick={()=>{setShowAdd(false);setEditIdx(null);}} color="#999">Cancel</Btn>
@@ -1684,18 +1783,38 @@ function MeetingsPage({data, saveKey, user, showToast, track}) {
 
     {meetings.length === 0 && !showAdd && <Card><p style={{textAlign:"center",color:"#999",padding:20}}>No meetings recorded yet.</p></Card>}
 
-    {meetings.map((m,i) => <Card key={m.id||i} border="#d1fae5">
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6,marginBottom:8}}>
-        <div style={{fontWeight:800,fontSize:15}}>📅 {m.date} {m.time && "\u2022 \u23f0 "+m.time}</div>
-        {isAdmin && <Btn onClick={()=>{setForm(m);setShowAdd(true);setEditIdx(i);}} color="#6b7280" style={{fontSize:10,padding:"4px 10px"}}> ✍️  Edit</Btn>}
-      </div>
-      {m.week && <div style={{fontSize:12,fontWeight:700,color:"#3da33d",marginBottom:4}}>🔢 {m.week}</div>}
-      {m.location && <div style={{fontSize:12,color:"#666",marginBottom:4}}>🗺️ {m.location}</div>}
-      {m.participants && <div style={{fontSize:12,marginBottom:6}}>👯 <strong>Participants:</strong> {m.participants}</div>}
-      {m.recordingLink && <div style={{fontSize:12,marginBottom:6}}>📹 <a href={m.recordingLink} target="_blank" rel="noreferrer" style={{color:"#3da33d"}}>View Recording</a></div>}
-      {m.notes && <div style={{padding:8,background:"#f9fafb",borderRadius:8,fontSize:12,marginBottom:4,whiteSpace:"pre-wrap",lineHeight:1.7}}><strong>Notes:</strong> {m.notes.replace(/<[^>]*>/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&")}</div>}
-      {m.summary && <div style={{padding:8,background:"#fef3c7",borderRadius:8,fontSize:12,whiteSpace:"pre-wrap",lineHeight:1.7}}><strong>📑 Minutes of Meeting:</strong> {m.summary.replace(/<[^>]*>/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&")}</div>}
-    </Card>)}
+    {meetings.map((m,i) => {
+      const key = m.id || i;
+      const isOpen = !!expanded[key];
+      return (<Card key={key} border="#d1fae5">
+        {/* Header row — always visible, click to toggle */}
+        <div onClick={()=>toggleExpand(key)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6,cursor:"pointer",userSelect:"none"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
+            <span style={{fontSize:14,color:"#3da33d",transition:"transform .2s",display:"inline-block",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>▶</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:800,fontSize:15}}>📅 {m.date} {m.time && "• ⏰ "+m.time}</div>
+              {m.week && <div style={{fontSize:11,fontWeight:700,color:"#3da33d",marginTop:2}}>🔢 {m.week}</div>}
+            </div>
+          </div>
+          {isAdmin && <Btn onClick={(e)=>{e.stopPropagation();setForm(m);setShowAdd(true);setEditIdx(i);}} color="#6b7280" style={{fontSize:10,padding:"4px 10px"}}>✍️ Edit</Btn>}
+        </div>
+
+        {/* Collapsible body */}
+        {isOpen && <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #e5e7eb",animation:"popIn .25s ease"}}>
+          {m.location && <div style={{fontSize:12,color:"#666",marginBottom:4}}>🗺️ {m.location}</div>}
+          {m.participants && <div style={{fontSize:12,marginBottom:6}}>👯 <strong>Participants:</strong> {m.participants}</div>}
+          {m.recordingLink && <div style={{fontSize:12,marginBottom:6}}>📹 <a href={m.recordingLink} target="_blank" rel="noreferrer" style={{color:"#3da33d"}}>View Recording</a></div>}
+          {m.notes && <div style={{padding:8,background:"#f9fafb",borderRadius:8,fontSize:12,marginBottom:4,lineHeight:1.7,overflowX:"auto"}}>
+            <strong>Notes:</strong>
+            <div dangerouslySetInnerHTML={{__html:m.notes}} />
+          </div>}
+          {m.summary && <div style={{padding:8,background:"#fef3c7",borderRadius:8,fontSize:12,lineHeight:1.7,overflowX:"auto"}}>
+            <strong>📑 Minutes of Meeting:</strong>
+            <div dangerouslySetInnerHTML={{__html:m.summary}} />
+          </div>}
+        </div>}
+      </Card>);
+    })}
   </div>);
 }
 
@@ -1775,9 +1894,9 @@ function GrowthTrendsAllUsers({members, recordings, reviews, appreciations, task
   </div>;
 }
 
-// ===== BRAG BOARD STATS (for Wall of Fame) =====
+// ===== Jar of JOYs STATS (for Wall of Fame) =====
 function BragBoardStats({bragboard, members}) {
-  if (!bragboard || bragboard.length === 0) return <p style={{textAlign:"center",color:"#bbb",padding:20}}>No brag posts yet! Head to the Brag Board to start bragging! \ud83e\udd29</p>;
+  if (!bragboard || bragboard.length === 0) return <p style={{textAlign:"center",color:"#bbb",padding:20}}>No posts yet! Head to the Jar of JOYs & start sharing! \ud83e\udd29</p>;
   const topBraggers = {};
   bragboard.forEach(b => { topBraggers[b.speaker] = (topBraggers[b.speaker]||0)+1; });
   const sorted = Object.entries(topBraggers).sort((a,b)=>b[1]-a[1]);
@@ -1785,158 +1904,208 @@ function BragBoardStats({bragboard, members}) {
   const totalEmojis = bragboard.reduce((a,b)=>a+Object.values(b.reactions||{}).reduce((x,y)=>x+y,0),0);
   return <div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12,marginBottom:16}}>
-      <div style={{background:"#fef3c7",borderRadius:12,padding:14,textAlign:"center"}}><div style={{fontSize:28}}></div><div style={{fontWeight:900,fontSize:22,color:"#d97706"}}>{bragboard.length}</div><div style={{fontSize:10,color:"#92400e"}}>Total Brags</div></div>
+      <div style={{background:"#fef3c7",borderRadius:12,padding:14,textAlign:"center"}}><div style={{fontSize:28}}></div><div style={{fontWeight:900,fontSize:22,color:"#d97706"}}>{bragboard.length}</div><div style={{fontSize:10,color:"#92400e"}}>Total Joys shared</div></div>
       <div style={{background:"#dbeafe",borderRadius:12,padding:14,textAlign:"center"}}><div style={{fontSize:28}}></div><div style={{fontWeight:900,fontSize:22,color:"#1d4ed8"}}>{totalComments}</div><div style={{fontSize:10,color:"#1e40af"}}>Comments</div></div>
       <div style={{background:"#fce7f3",borderRadius:12,padding:14,textAlign:"center"}}><div style={{fontSize:28}}></div><div style={{fontWeight:900,fontSize:22,color:"#be185d"}}>{totalEmojis}</div><div style={{fontSize:10,color:"#9d174d"}}>Emoji Reactions</div></div>
     </div>
-    <h3 style={{fontWeight:800,fontSize:15,color:"#1b7a1b",marginBottom:8}}>🏅 Top Braggers</h3>
+    <h3 style={{fontWeight:800,fontSize:20,color:"#1b7a1b",marginBottom:8}}>🏅 Happy YOU.. Happy ME.. Happy WORLD! 🌍 </h3>
     {sorted.map(([name,count],i) => {
       const m = members.find(x=>x.name===name);
       return <div key={name} style={{display:"flex",alignItems:"center",gap:10,padding:8,background:i===0?"#fef3c7":"#fff",borderRadius:10,marginBottom:6}}>
         <span style={{fontSize:18,fontWeight:900,color:i===0?"#d97706":"#999"}}>{i===0?"\ud83e\udd47":i===1?"\ud83e\udd48":i===2?"\ud83e\udd49":"#"+(i+1)}</span>
         <span style={{fontSize:16}}>{m?.emoji||"\ud83d\ude0e"}</span>
         <span style={{fontWeight:700,fontSize:14}}>{name}</span>
-        <span style={{marginLeft:"auto",fontWeight:800,color:"#d97706"}}>{count} brag{count>1?"s":""}</span>
+        <span style={{marginLeft:"auto",fontWeight:800,color:"#d97706"}}>{count === 1 ? "1 joy in the jar" : count + " joys in the jar"}</span>
       </div>;
     })}
   </div>;
 }
 
-// ===== BRAG BOARD PAGE =====
-function BragBoardPage({data, saveKey, user, showToast, track}) {
+// ===== Jar of JOYs PAGE =====
+function BragBoardPage({data, saveKey, user, showToast, track, setData}) {
   const bragboard = data.bragboard || [];
   const members = data.members || [];
   const isAdmin = user.role === "admin";
   const [form, setForm] = useState({speaker:"",activity:"",text:"",photo:""});
   const [dragOver, setDragOver] = useState(false);
   const [commentForm, setCommentForm] = useState({});
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
-  const EMOJI_LIST = ["\ud83d\udc4f","\ud83d\ude0d","\ud83d\ude02","\ud83d\udd25","\ud83c\udf1f","\ud83e\udd29","\ud83d\udcaa","\ud83c\udf89","\u2764\ufe0f","\ud83d\ude4c"];
+  const EMOJI_LIST = ["👏","😍","😂","🔥","🌟","🤩","💪","🎉","❤️","🙌"];
 
-  const handleFile = (files) => {
+  // Update a single post: writes to Firebase under its own node AND updates
+  // local React state immediately so the UI reflects the change without
+  // waiting for the next poll cycle.
+  const upsertPost = async (post) => {
+    await S.bragSetPost(post);
+    setData(prev => {
+      const arr = prev.bragboard || [];
+      const idx = arr.findIndex(p => p.id === post.id);
+      const next = idx >= 0 ? arr.map(p => p.id === post.id ? post : p) : [post, ...arr];
+      next.sort((a,b) => (b.ts||0) - (a.ts||0));
+      return {...prev, bragboard: next};
+    });
+  };
+
+  const removePost = async (postId) => {
+    await S.bragDeletePost(postId);
+    setData(prev => ({...prev, bragboard: (prev.bragboard||[]).filter(p => p.id !== postId)}));
+  };
+
+  // Compress image before storing — resizes + re-encodes as JPEG
+  const compressImage = (file, maxDim = 1200, quality = 0.75) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          let {width, height} = img;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
+            else { width = Math.round(width * maxDim / height); height = maxDim; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width; canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          resolve(dataUrl);
+        };
+        img.onerror = reject;
+        img.src = ev.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFile = async (files) => {
     if (!files || !files[0]) return;
     const file = files[0];
     if (!file.type.startsWith("image/")) { showToast("Please upload an image!","err"); return; }
-    if (file.size > 3*1024*1024) { showToast("Max 3MB!","err"); return; }
-    const reader = new FileReader();
-    reader.onload = (ev) => setForm({...form, photo: ev.target.result});
-    reader.readAsDataURL(file);
+    if (file.size > 10*1024*1024) { showToast("Max 10MB before compression!","err"); return; }
+    setUploading(true);
+    try {
+      const compressed = await compressImage(file);
+      const kb = Math.round(compressed.length * 0.75 / 1024);
+      setForm(f => ({...f, photo: compressed}));
+      showToast(`Photo ready (~${kb}KB) 📸`);
+    } catch (e) {
+      showToast("Couldn't process image","err");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const submit = async () => {
-    if (!form.speaker) { showToast("Who's bragging?","err"); return; }
+    if (!form.speaker) { showToast("Who's sharing this wonderful thing?","err"); return; }
     if (!form.text && !form.photo) { showToast("Add text or a photo!","err"); return; }
     const post = {
       id: Date.now().toString(36)+Math.random().toString(36).substr(2,4),
       speaker: form.speaker,
       activity: form.activity,
       text: form.text,
-      photo: form.photo ? form.photo.slice(0,200)+"__IMG__" : "",
+      photo: form.photo || "",
       date: new Date().toLocaleString(),
       ts: Date.now(),
       by: user.display || user.u,
       comments: [],
       reactions: {}
     };
-    // Store photo blob locally (too large for shared)
-    if (form.photo) { try { localStorage.setItem("mts_brag_img_"+post.id, form.photo); } catch {} }
-    const updated = [post, ...bragboard];
-    await saveKey("bragboard", updated);
-    track("bragpost", form.speaker + " - " + (form.activity||"brag"));
+    await upsertPost(post);
+    track("bragpost", form.speaker + " - " + (form.activity||"post"));
     setForm({speaker:"",activity:"",text:"",photo:""});
-    showToast("Brag posted! \ud83e\udd29\ud83c\udf89");
+    showToast("Joy added to the jar! 🌿✨ 🤩🎉");
   };
 
   const addComment = async (postId) => {
     const text = (commentForm[postId]||"").trim();
     if (!text) return;
-    const updated = bragboard.map(b => {
-      if (b.id === postId) return {...b, comments: [...(b.comments||[]), {by:user.display||user.u, text, ts:Date.now(), date:new Date().toLocaleString()}]};
-      return b;
-    });
-    await saveKey("bragboard", updated);
+    const post = bragboard.find(b => b.id === postId);
+    if (!post) return;
+    const updatedPost = {
+      ...post,
+      comments: [...(post.comments||[]), {by:user.display||user.u, text, ts:Date.now(), date:new Date().toLocaleString()}]
+    };
+    await upsertPost(updatedPost);
     setCommentForm({...commentForm, [postId]: ""});
-    showToast("Comment added! \ud83d\udcac");
+    showToast("Comment added! 💬");
   };
 
   const addReaction = async (postId, emoji) => {
-    const updated = bragboard.map(b => {
-      if (b.id === postId) {
-        const reactions = {...(b.reactions||{})};
-        reactions[emoji] = (reactions[emoji]||0) + 1;
-        return {...b, reactions};
-      }
-      return b;
-    });
-    await saveKey("bragboard", updated);
+    const post = bragboard.find(b => b.id === postId);
+    if (!post) return;
+    const reactions = {...(post.reactions||{})};
+    reactions[emoji] = (reactions[emoji]||0) + 1;
+    await upsertPost({...post, reactions});
   };
 
   const deletePost = async (postId) => {
-    if (!window.confirm("Delete this brag post?")) return;
-    const updated = bragboard.filter(b => b.id !== postId);
-    await saveKey("bragboard", updated);
+    if (!window.confirm("Delete this joyful moment?")) return;
+    await removePost(postId);
     try { localStorage.removeItem("mts_brag_img_"+postId); } catch {}
-    showToast("Post deleted! \ud83d\uddd1\ufe0f");
+    showToast("Post deleted! 🗑️");
+  };
+
+  const getPostImage = (post) => {
+    if (post.photo && post.photo.startsWith("data:")) return post.photo;
+    try { return localStorage.getItem("mts_brag_img_"+post.id) || ""; } catch { return ""; }
   };
 
   return (<div style={{animation:"popIn .4s ease"}}>
     <h1 style={{fontWeight:900,fontSize:28,color:"#1b7a1b",marginBottom:4,display:"flex",alignItems:"center",gap:8}}>
-		<span style={{fontSize:36,animation:"wiggle 1s infinite"}}>😃🕺💃😃</span>
-			<span style={{
-			  fontSize:40,
-			  animation:"rainbow 3s infinite, pop 1s infinite"
-			}}>
-			  🌟 Brag Board 🌟
-			</span>
-			<span style={{fontSize:36,animation:"bounce 0.8s infinite"}}>
-			  🤸🤹‍♂️🎭🎨
-			</span>
+      <span style={{fontSize:36,animation:"wiggle 1s infinite"}}>😃🕺💃😃</span>
+      <span style={{fontSize:40,animation:"rainbow 3s infinite, pop 1s infinite"}}>🌟 🌿 Jar of Joys 🌿 🌟</span>
+      <span style={{fontSize:36,animation:"bounce 0.8s infinite"}}>🤸🤹‍♂️🎭🎨</span>
     </h1>
     <p style={{fontSize:14,color:"#6b7280",marginBottom:16,fontWeight:600}}>Show off your awesome moments! Post photos, share activities, and cheer each other on! </p>
 
     {/* New Post Form */}
-    <Card title=" Post a Brag!" bg="linear-gradient(135deg,#fffbeb,#fef9c3)" border="#fbbf24">
+    <Card title=" Post a Joyful Moment! " bg="linear-gradient(135deg,#fffbeb,#fef9c3)" border="#fbbf24">
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
         <Sel value={form.speaker} onChange={e=>setForm({...form,speaker:e.target.value})}>
-          <option value="">-- Who's bragging? --</option>
+          <option value="">-- Who's sharing this wonderful thing? --</option>
           {members.map(m=><option key={m.name} value={m.name}>{m.emoji} {m.name}</option>)}
         </Sel>
         <Inp value={form.activity} onChange={e=>setForm({...form,activity:e.target.value})} placeholder=" Activity (e.g. Silly Joys, Happy Hangouts, Dance, Sing, Sport, Nature Walk, ...)" />
       </div>
       <Txt value={form.text} onChange={e=>setForm({...form,text:e.target.value})} placeholder=" Tell everyone what happened! Be proud! " />
+
       {/* Photo upload with drag & drop */}
       <div
         onDragOver={e=>{e.preventDefault();setDragOver(true);}}
         onDragLeave={()=>setDragOver(false)}
         onDrop={e=>{e.preventDefault();setDragOver(false);handleFile(e.dataTransfer.files);}}
-        onClick={()=>fileRef.current?.click()}
-        style={{border:dragOver?"3px dashed #3da33d":"3px dashed #d1fae5",borderRadius:12,padding:form.photo?8:24,textAlign:"center",cursor:"pointer",background:dragOver?"#d1fae5":"#fff",transition:".2s",marginBottom:10}}>
-        {form.photo ? <div style={{position:"relative"}}>
-          <img src={form.photo} alt="Preview" style={{maxHeight:180,borderRadius:10,maxWidth:"100%"}} />
-          <button onClick={e=>{e.stopPropagation();setForm({...form,photo:""});}} style={{position:"absolute",top:4,right:4,background:"#ef4444",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,fontSize:14,cursor:"pointer",fontWeight:700}}>\u00d7</button>
-        </div> : <div>
-          <div style={{fontSize:13,fontWeight:700,color:"#6b7280"}}>Click or drag & drop a photo here!</div>
-          <div style={{fontSize:11,color:"#999"}}>Works on mobile & desktop; Max 3MB</div>
-        </div>}
+        onClick={()=>!uploading && fileRef.current?.click()}
+        style={{border:dragOver?"3px dashed #3da33d":"3px dashed #d1fae5",borderRadius:12,padding:form.photo?8:24,textAlign:"center",cursor:uploading?"wait":"pointer",background:dragOver?"#d1fae5":"#fff",transition:".2s",marginBottom:10,opacity:uploading?0.6:1}}>
+        {uploading ? <div style={{fontSize:13,fontWeight:700,color:"#3da33d"}}>⏳ Compressing photo...</div>
+         : form.photo ? <div style={{position:"relative"}}>
+			<img src={form.photo} alt="Preview" style={{display:"block",maxWidth:"100%",width:"auto",height:"auto",maxHeight:"min(40vh, 240px)",objectFit:"contain",margin:"0 auto",borderRadius:10}} />
+            <button onClick={e=>{e.stopPropagation();setForm({...form,photo:""});}} style={{position:"absolute",top:4,right:4,background:"#ef4444",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,fontSize:14,cursor:"pointer",fontWeight:700}}>×</button>
+          </div>
+         : <div>
+            <div style={{fontSize:13,fontWeight:700,color:"#6b7280"}}>Click or drag & drop a photo here!</div>
+            <div style={{fontSize:11,color:"#999"}}>Syncs to everyone • auto-compressed • max 10MB</div>
+          </div>}
         <input ref={fileRef} type="file" accept="image/*" onChange={e=>handleFile(e.target.files)} style={{display:"none"}} />
       </div>
 
-      <Btn onClick={submit} color="linear-gradient(135deg,#f59e0b,#d97706)"> Post Brag!</Btn>
+      <Btn onClick={submit} color="linear-gradient(135deg,#f59e0b,#d97706)" disabled={uploading}> Yippee! Post it!</Btn>
     </Card>
 
     {/* Posts */}
-    {bragboard.length === 0 && <Card><p style={{textAlign:"center",color:"#bbb",padding:30,fontSize:15}}>No brags yet! Be the first to share something awesome! </p></Card>}
+    {bragboard.length === 0 && <Card><p style={{textAlign:"center",color:"#bbb",padding:30,fontSize:15}}>No posts yet! Be the first to share something awesome! </p></Card>}
 
     {bragboard.map(post => {
       const m = members.find(x=>x.name===post.speaker);
-      const imgData = localStorage.getItem("mts_brag_img_"+post.id);
+      const imgData = getPostImage(post);
       return <Card key={post.id} bg="linear-gradient(135deg,#fff,#fafff5)" border={m?.color||"#6fcf6f"}>
         {/* Header */}
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-          <div style={{width:40,height:40,borderRadius:"50%",background:m?.color||"#3da33d",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#fff",fontWeight:800}}>{m?.emoji||"\ud83d\ude0e"}</div>
+          <div style={{width:40,height:40,borderRadius:"50%",background:m?.color||"#3da33d",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#fff",fontWeight:800}}>{m?.emoji||"😎"}</div>
           <div style={{flex:1}}>
-            <div style={{fontWeight:800,fontSize:15}}>{post.speaker} <span style={{fontSize:11,color:"#999",fontWeight:500}}>bragged about</span> <span style={{color:"#d97706",fontWeight:700}}>{post.activity||"something awesome"}</span></div>
+            <div style={{fontWeight:800,fontSize:15}}>{post.speaker} <span style={{fontSize:11,color:"#999",fontWeight:500}}>shared about</span> <span style={{color:"#d97706",fontWeight:700}}>{post.activity||"something awesome"}</span></div>
             <div style={{fontSize:10,color:"#999"}}> {post.date} ; posted by {post.by}</div>
           </div>
           {isAdmin && <Btn onClick={()=>deletePost(post.id)} color="#ef4444" style={{padding:"4px 8px",fontSize:10}}> Delete this Post? </Btn>}
@@ -1944,7 +2113,7 @@ function BragBoardPage({data, saveKey, user, showToast, track}) {
 
         {/* Content */}
         {post.text && <p style={{fontSize:14,lineHeight:1.7,marginBottom:10,padding:10,background:"#fafafa",borderRadius:10}}>{post.text}</p>}
-        {imgData && <img src={imgData} alt="Brag" style={{width:"100%",maxHeight:300,objectFit:"cover",borderRadius:12,marginBottom:10}} />}
+		{imgData && <img src={imgData} alt="Such a JOY..." style={{display:"block",maxWidth:"100%",width:"auto",height:"auto",maxHeight:"min(70vh, 600px)",objectFit:"contain",margin:"0 auto 10px",borderRadius:12,background:"#f9fafb"}} />}
 
         {/* Emoji Reactions */}
         <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>
