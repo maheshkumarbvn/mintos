@@ -1236,7 +1236,7 @@ function AgendaPage({data, saveKey, user, showToast}) {
 function AppreciationPage({data,saveKey,user,showToast,track}) {
   const [week, setWeek] = useState(0);
   const [form, setForm] = useState({who:"",text:""});
-  const filtered = data.appreciations.filter(a => a.week===week);
+  const filtered = (data.appreciations || []).filter(a => a && a.week === week);
 
   const submit = async () => {
     if (!form.who||!form.text.trim()) { showToast("Select someone and write!","err"); return; }
