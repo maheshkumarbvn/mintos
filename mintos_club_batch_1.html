@@ -224,7 +224,7 @@ const DEF_AGENDA = [
 	  {
         time: "5 min",
         title: "👂 I hear you!",
-        text: "👂 Previous feedback implementation 🤝: <from Advitha> Spot-the-difference game to identify variations in pictures - 10 differences in less than 2 minutes!"
+        text: "👂 Previous fun feedback implementation 🤝: <from Advitha> Spot-the-difference game to identify variations in pictures - 10 differences in less than 2 minutes!"
       },
 	  { time: "5 min", text: "Everyone shares healthy feedback to make it better & more fun!" },
       {
@@ -276,7 +276,7 @@ const DEF_AGENDA = [
       {
         time: "10 min",
         title: "Warm-Up Fun",
-        text: "👂 Previous feedback implementation 🤝 <from Gupti, Kruthika>  Warm-Up Fun, Quick Icebreaker Story-building game: “Mr.MinTo starts a sentence and everyone continues collaboratively, following a fun-based story theme. End goal is to create such a story that all participants will 🤣 ROFL 🤣 "
+        text: "👂 Previous fun feedback implementation 🤝 <from Gupti, Kruthika>  Warm-Up Fun, Quick Icebreaker Story-building game: “Mr.MinTo starts a sentence and everyone continues collaboratively, following a fun-based story theme. End goal is to create such a story that all participants will 🤣 ROFL 🤣 "
       },
       {
         time: "25 min",
@@ -531,7 +531,7 @@ function App() {
         {page==="walloffame" && <WallOfFamePage data={data} />}
         {page==="agenda" && <AgendaPage data={data} saveKey={saveKey} user={user} showToast={showToast} />}
         {page==="meetings" && <MeetingsPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
-        {page==="bragboard" && <BragBoardPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
+        {page==="bragboard" && <BragBoardPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} setData={setData} />}
         {page==="appreciation" && <AppreciationPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
         {page==="resources" && <ResourcesPage data={data} />}
         {page==="admin" && user.role==="admin" && <AdminPage data={data} saveKey={saveKey} showToast={showToast} user={user} />}
@@ -2071,7 +2071,7 @@ function GrowthTrendsAllUsers({members, recordings, reviews, appreciations, task
 
 // ===== Jar of JOYs STATS (for Wall of Fame) =====
 function BragBoardStats({bragboard, members}) {
-  if (!bragboard || bragboard.length === 0) return <p style={{textAlign:"center",color:"#bbb",padding:20}}>No posts yet! Head to the Jar of JOYs & start sharing! \ud83e\udd29</p>;
+  if (!bragboard || bragboard.length === 0) return <p style={{textAlign:"center",color:"#bbb",padding:20}}>No posts yet! Head to the Jar of JOYs & start sharing! 🤩 </p>;
   const topBraggers = {};
   bragboard.forEach(b => { topBraggers[b.speaker] = (topBraggers[b.speaker]||0)+1; });
   const sorted = Object.entries(topBraggers).sort((a,b)=>b[1]-a[1]);
@@ -2194,16 +2194,19 @@ function BragBoardPage({data, saveKey, user, showToast, track, setData}) {
     if (file.size > 10*1024*1024) { showToast("Max 10MB before compression!","err"); return; }
     setUploading(true);
     try {
+      const originalKB = Math.round(file.size / 1024);
       const compressed = await compressImage(file);
-      const kb = Math.round(compressed.length * 0.75 / 1024);
-      setForm(f => ({...f, photo: compressed}));
-      showToast(`Photo ready (~${kb}KB) 📸`);
+      const compressedKB = Math.round(compressed.length * 0.75 / 1024);
+      setForm(f => ({...f, photo: compressed, photoOriginalKB: originalKB, photoCompressedKB: compressedKB}));
+      const pct = Math.round((1 - compressedKB/originalKB) * 100);
+      showToast(`Photo ready: ${originalKB}KB → ${compressedKB}KB (${pct}% smaller) 📸`);
     } catch (e) {
       showToast("Couldn't process image","err");
     } finally {
       setUploading(false);
     }
   };
+
 
   const submit = async () => {
     if (!form.speaker) { showToast("Who's sharing this wonderful thing?","err"); return; }
@@ -2214,6 +2217,8 @@ function BragBoardPage({data, saveKey, user, showToast, track, setData}) {
       activity: form.activity,
       text: form.text,
       photo: form.photo || "",
+      photoOriginalKB: form.photoOriginalKB || 0,
+      photoCompressedKB: form.photoCompressedKB || 0,
       date: new Date().toLocaleString(),
       ts: Date.now(),
       by: user.display || user.u,
@@ -2222,7 +2227,7 @@ function BragBoardPage({data, saveKey, user, showToast, track, setData}) {
     };
     await upsertPost(post);
     track("bragpost", form.speaker + " - " + (form.activity||"post"));
-    setForm({speaker:"",activity:"",text:"",photo:""});
+    setForm({speaker:"",activity:"",text:"",photo:"",photoOriginalKB:0,photoCompressedKB:0});
     showToast("Joy added to the jar! 🌿✨ 🤩🎉");
   };
 
@@ -2289,7 +2294,7 @@ function BragBoardPage({data, saveKey, user, showToast, track, setData}) {
         {uploading ? <div style={{fontSize:13,fontWeight:700,color:"#3da33d"}}>⏳ Compressing photo...</div>
          : form.photo ? <div style={{position:"relative"}}>
 			<img src={form.photo} alt="Preview" style={{display:"block",maxWidth:"100%",width:"auto",height:"auto",maxHeight:"min(40vh, 240px)",objectFit:"contain",margin:"0 auto",borderRadius:10}} />
-            <button onClick={e=>{e.stopPropagation();setForm({...form,photo:""});}} style={{position:"absolute",top:4,right:4,background:"#ef4444",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,fontSize:14,cursor:"pointer",fontWeight:700}}>×</button>
+            <button onClick={e=>{e.stopPropagation();setForm({...form,photo:"",photoOriginalKB:0,photoCompressedKB:0});}} style={{position:"absolute",top:4,right:4,background:"#ef4444",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,fontSize:14,cursor:"pointer",fontWeight:700}}>×</button>
           </div>
          : <div>
             <div style={{fontSize:13,fontWeight:700,color:"#6b7280"}}>Click or drag & drop a photo here!</div>
@@ -2320,7 +2325,16 @@ function BragBoardPage({data, saveKey, user, showToast, track, setData}) {
 
         {/* Content */}
         {post.text && <p style={{fontSize:14,lineHeight:1.7,marginBottom:10,padding:10,background:"#fafafa",borderRadius:10}}>{post.text}</p>}
-		{imgData && <img src={imgData} alt="Such a JOY..." style={{display:"block",maxWidth:"100%",width:"auto",height:"auto",maxHeight:"min(70vh, 600px)",objectFit:"contain",margin:"0 auto 10px",borderRadius:12,background:"#f9fafb"}} />}
+		{imgData && <>
+			  <img src={imgData} alt="Such a JOY..." style={{display:"block",maxWidth:"100%",width:"auto",height:"auto",maxHeight:"min(70vh, 600px)",objectFit:"contain",margin:"0 auto 4px",borderRadius:12,background:"#f9fafb"}} />
+			  {(post.photoOriginalKB || post.photoCompressedKB) ? (
+				<div style={{textAlign:"center",fontSize:10,color:"#888",marginBottom:10,fontStyle:"italic"}}>
+				  📦 Original: <strong>{post.photoOriginalKB}KB</strong> → Compressed: <strong style={{color:"#3da33d"}}>{post.photoCompressedKB}KB</strong>
+				  {post.photoOriginalKB > 0 && <span> ({Math.round((1 - post.photoCompressedKB/post.photoOriginalKB) * 100)}% smaller 🎉)</span>}
+				</div>
+			  ) : <div style={{marginBottom:10}} />}
+			</>
+		}
 
         {/* Emoji Reactions */}
         <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>
