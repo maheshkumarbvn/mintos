@@ -192,58 +192,109 @@ const DEF_TASKS = [
     {id:"effort",label:"Effort & Creativity",desc:"Went above and beyond",icon:"🌟"},
   ]},
 ];
+
 const DEF_AGENDA = [
   {
     week: 0,
-    title: "🎉 Week-0: Hello & Happiness!",
+    title: "🎉 Week-0: Hello & Happiness! 😃",
     goal: "Break the ice, build comfort, create excitement",
     items: [
       { time: "10 min", text: "Icebreaker: 2 Truths & 1 Silly Lie game" },
       { time: "10 min", text: "Club Intro: What is MinTos + fun rules discussion" },
       { time: "15 min", text: "SpeakTo Role: Name, Favorite things, Dream superpower" },
-      { time: "5 min", text: "Healthy Feedback: Everyone gives feedback!" },
+      { time: "5 min", text: "Healthy Feedback: Everyone gives feedback!" }
     ],
     challenge: "Bring your favorite object + 1-min talk",
     sneak_peek: "Quick Talk on Communication topics"
   },
+
   {
     week: 1,
-    title: "🗣️ Week-1: Talk It Out!",
-    goal: "Practice organized thinking and clear speech",
+    title: "🗣️ Week-1: Talk It Out! 🎙️",
+    goal: "Practice organized and clear speech",
     items: [
+      { time: "5 min", text: "Parents Speeches" },
       {
         time: "20 min",
         title: "Quick Talk",
-        text: `
-          Each kid takes turns and shares their thoughts for 2 minutes each, related to anything about Communication.
-
-          <div style="margin-top:8px; font-weight:bold;">Example topics:</div>
-          <ul style="margin-top:4px; padding-left:18px;">
-            <li>Why is it important to communicate effectively?</li>
-            <li>How did the first people communicate before languages came in?</li>
-            <li>Imagine how the world would be without a way to communicate?</li>
-            <li>How do other living beings communicate?</li>
-            <li>The significance of effective communication</li>
-          </ul>
-        `
+        text: "Each kid takes turns and shares their thoughts for 2 minutes each related to communication.\n\nExample topics:\n1. Why is it important to communicate effectively?\n2. How did the first people communicate before languages came in?\n3. Imagine how the world would be without a way to communicate?\n4. How do other living beings communicate?\n5. The significance of effective communication"
       },
-      {
-        time: "15 min",
-        text: "News Time: Simple kid-friendly topic: “What cool thing happened this week?” Check the 'Resources' page."
-      },
-      {
-        time: "15 min",
-        text: "Parents give constructive & appreciative feedback for each user and each item"
-      },
+      { time: "10 min", text: "🧠 News Time: Simple kid-friendly topic: What cool thing happened this week? Check the Resources page." },
+      { time: "10 min", text: "Parents use the application to give constructive & appreciative feedback for each user and each item" },
+      { time: "5 min", text: "Everyone shares healthy feedback to make it better & more fun!" },
       {
         time: "5 min",
-        text: "Everyone shares healthy feedback to make it better & more fun!"
-      },
+        title: "🎉 Wrap-Up Circle",
+        text: "🎉 Wrap-Up Circle: Kids will self-evaluate and volunteer to share..:\n1. Today I did well in...\n2. Next time I want to improve..."
+      }
     ],
     challenge: "Focus on all the Measures of Success!",
+    sneak_peek: "Next week… 🎤✨ we become Scientists 👨‍🔬🧪👩‍🔬 and Detectives! 🔍 🕵️ "
+  },
+
+  {
+    week: 2,
+    title: "🧪 Week-2: Science Explorers 👨‍🔬 👩‍🔬 & Mystery Detectives 🔍 🕵️!",
+    goal: "Explain a science idea clearly, confidently, and in a fun way with real-life connections. “Who-dunit” builds critical thinking + listening skills",
+    items: [
+      {
+        time: "20 min",
+        title: "🎲 Mystery Game: Who-Dunit? 🕵️‍♂️",
+        text: "Mr.MinTo reads a fun mystery story to the audience. Kids become detectives, work together as a team, listen attentively, and try to guess:\n1. Who did it?\n2. What clues helped you?\n3. Why do you think so?"
+      },
+      {
+        time: "20 min",
+        title: "🧪 SpeakTo: My Science Talk",
+        text: "Each kid presents a science topic (2–3 min each):\n\n You may include:\n1. What is the topic?\n2. How does it work? (simple explanation)\n3. What is the science behind it?\n4. Where do we see this in real life?\n5. Why is it interesting or useful?\n\nBonus: Use examples, props, or drawings!"
+      },
+      {
+        time: "10 min",
+        title: "🧠 News Time",
+        text: "🧠 News Time: Discuss a kid-friendly news story:\n1. What happened?\n2. Is there any science behind it?\n3. Why is it important or interesting?\n\nKeep it interactive and fun."
+      },
+      { time: "10 min", text: "Parents use the application to give constructive & appreciative feedback for each user and each item" },
+      {
+        time: "5 min",
+        title: "🎉 Wrap-Up Circle",
+        text: "🎉 Wrap-Up Circle: Kids will self-evaluate and volunteer to share..:\n1. Today I did well in...\n2. Next time I want to improve..."
+      }
+    ],
+    challenge: "🧪 Share clearly:\n1. One thing you loved about today's meeting and/or one idea to make it even better.",
     sneak_peek: "Next week… we become storytellers! 📖✨"
+  },
+
+  {
+    week: 3,
+    title: "📚 Week-3: Story-tellers & Book Explorers!",
+    goal: "Build storytelling skills & Express ideas from books clearly and confidently",
+    items: [
+      {
+        time: "5 min",
+        title: "Warm-Up Fun",
+        text: "Warm-Up Fun: Quick Icebreaker: “One word to describe your book!” (Example: funny, adventurous, magical)"
+      },
+      {
+        time: "25 min",
+        title: "📖 SpeakTo: My Book Talk",
+        text: "📖 My Book Talk: Each kid shares about the book they read (2–3 min each). \n\nBonus: Act out a small part or use funny voices! \n\nYou may include:\n1. Book name\n2. Favorite character\n3. What happened in the story (short summary)\n4. What did you learn?\n5. Did you like it? Why or why not?"
+      },
+      {
+        time: "10 min",
+        title: "🧠 News Time",
+        text: "🧠 News Time: Discuss a kid-friendly news story:\n1. What happened?\n2. Why is it interesting?\n3. What do you think about it?\n\nKeep it simple and fun."
+      },
+      { time: "10 min", text: "Parents use the application to give constructive & appreciative feedback for each user and each item" },
+      {
+        time: "5 min",
+        title: "🎉 Wrap-Up Circle",
+        text: "🎉 Wrap-Up Circle: Kids will self-evaluate and volunteer to share..:\n1. Today I did well in...\n2. Next time I want to improve..."
+      }
+    ],
+    challenge: "📚 🎲 Pick one friend's speech, prepare fun impromptu, imagination prompts, organize your thoughts and speak for about 1 minute: \n Example beginnings: 1. If I was in the story, I would...\n2. I would change the ending by...\n3. The funniest moment would be... <Impromptu refers to actions, speeches, or performances done spontaneously without advance planning, rehearsal, or preparation.>",
+    sneak_peek: "Next week… let’s organize ideas like pros and build powerful speeches! 🧱✨"
   }
 ];
+
 const DEF_RESOURCES = [
   {title:"News for Kids",url:"https://newsforkids.net/",icon:"📰",desc:"Kid-friendly news articles"},
   {title:"The Hindu",url:"https://www.thehindu.com/",icon:"🗞️",desc:"Quality news resource"},
@@ -418,8 +469,8 @@ function App() {
     {id:"reviews",icon:"\u2b50",label:"Reviews",roles:["kid","parent","admin"]},
     {id:"walloffame",icon:"\ud83c\udfc6",label:"Wall of Fame",roles:["kid","parent","admin"]},
     {id:"appreciation",icon:"\ud83c\udf1f",label:"Stars",roles:["kid","parent","admin"]},
-    {id:"studio",icon:"\ud83c\udfa4",label:"Studio",roles:["kid","parent","admin"]},
-    {id:"feedback",icon:"\ud83d\udcac",label:"Feedback",roles:["kid","parent","admin"]},
+    {id:"studio",icon:"\ud83c\udfa4",label:"Studio",roles:["admin"]},
+    {id:"feedback",icon:"\ud83d\udcac",label:"Feedback",roles:["admin"]},
     {id:"resources",icon:"\ud83d\udcda",label:"Resources",roles:["kid","parent","admin"]},
     {id:"admin",icon:"\u2699\ufe0f",label:"Admin",roles:["admin"]},
     {id:"analytics",icon:"\ud83d\udcca",label:"Analytics",roles:["admin"]},
@@ -1153,13 +1204,26 @@ function GrowthStoriesTab({members, recordings, reviews, appreciations, tasks, a
 
 // ===== AGENDA =====
 function AgendaPage({data, saveKey, user, showToast}) {
+  const [expanded, setExpanded] = React.useState({});
+  const toggle = (i) => setExpanded(prev => ({...prev, [i]: !prev[i]}));
+
   return (<div style={{animation:"fadeIn .4s"}}><h1 style={{fontWeight:900,fontSize:26,color:"#1b7a1b",marginBottom:16}}>📋 Agenda — Fun is in!! 🎉</h1>
-    {data.agenda.map((w,i) => <Card key={i} title={w.title}>
-      <p style={{color:"#6b7280",marginBottom:10,fontSize:13}}>🎯 Goal: {w.goal}</p>
-      {w.items.map((item,j) => <div key={j} style={{padding:"6px 0",borderBottom:"1px solid #f3f3f3",display:"flex",gap:10,alignItems:"flex-start"}}><span style={{background:"#e9f7e9",color:"#1b7a1b",padding:"3px 8px",borderRadius:7,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{item.time}</span><span style={{fontSize:13}}>{item.text}</span></div>)}
-      {w.challenge && <div style={{marginTop:10,background:"#e9f7e9",padding:10,borderRadius:9,fontSize:13}}><strong>🎮 Challenge:</strong> {w.challenge}</div>}
-      {w.sneak_peek && <div style={{marginTop:6,background:"#fef3c7",padding:10,borderRadius:9,fontSize:13}}><strong>🔮 Sneak Peek:</strong> {w.sneak_peek}</div>}
-    </Card>)}
+    {data.agenda.map((w,i) => {
+      const isOpen = !!expanded[i];
+      return (<Card key={i} title={
+        <div onClick={() => toggle(i)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",width:"100%"}}>
+          <span>{w.title}</span>
+          <span style={{fontSize:14,color:"#1b7a1b",marginLeft:10,transition:"transform .2s",transform:isOpen?"rotate(180deg)":"rotate(0deg)"}}>▼</span>
+        </div>
+      }>
+        {isOpen && <div style={{animation:"fadeIn .3s"}}>
+          <p style={{color:"#6b7280",marginBottom:10,fontSize:13}}>🎯 Goal: {w.goal}</p>
+          {w.items.map((item,j) => <div key={j} style={{padding:"6px 0",borderBottom:"1px solid #f3f3f3",display:"flex",gap:10,alignItems:"flex-start"}}><span style={{background:"#e9f7e9",color:"#1b7a1b",padding:"3px 8px",borderRadius:7,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{item.time}</span><span style={{fontSize:13}}>{item.text}</span></div>)}
+          {w.challenge && <div style={{marginTop:10,background:"#e9f7e9",padding:10,borderRadius:9,fontSize:13}}><strong>🎮 Challenge:</strong> {w.challenge}</div>}
+          {w.sneak_peek && <div style={{marginTop:6,background:"#fef3c7",padding:10,borderRadius:9,fontSize:13}}><strong>🔮 Sneak Peek:</strong> {w.sneak_peek}</div>}
+        </div>}
+      </Card>);
+    })}
   </div>);
 }
 
