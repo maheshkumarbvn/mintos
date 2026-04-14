@@ -31,21 +31,137 @@ body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
 <script type="text/babel">
 
 const { useState, useEffect, useRef, useCallback } = React;
-const isAdmin = true; // TEMP: set based on your auth logic
-
 
 // ---------------------------------------------------------------------
-// linkedKidsOf — the canonical helper for resolving a user's linked kids.
-// Always returns an ARRAY of kid display names. Handles:
-//   - undefined/null  -> []
-//   - string "Advitha" -> ["Advitha"]
-//   - array ["Gupti","Poshya"] -> ["Gupti","Poshya"]
-// Use this EVERYWHERE instead of touching user.linkedKid directly.
+// ROLE SYSTEM
+// Roles: "admin" | "parent" | "kid"
+// A user object now looks like:
+//   { u, p, role: "parent"|"kid"|"admin", active, linkedKids: [...], displayName }
+// linkedKids is ALWAYS resolved via linkedKidsOf(user) — never read directly.
+// ---------------------------------------------------------------------
+const ROLES = { ADMIN: "admin", PARENT: "parent", KID: "kid" };
+
+function isAdminUser(user)  { return !!user && user.role === ROLES.ADMIN; }
+function isParentUser(user) { return !!user && user.role === ROLES.PARENT; }
+function isKidUser(user)    { return !!user && user.role === ROLES.KID; }
+
+// Central access rules — every page gate should call one of these.
+const ACCESS = {
+  canSubmitReview: (u) => isAdminUser(u) || isParentUser(u),
+  canViewOwnReviews: (u) => isAdminUser(u) || isParentUser(u),
+  canViewAllReviews: (u) => isAdminUser(u),
+  canEditAnyReview:  (u) => isAdminUser(u),
+  canViewHowDidIDo:  (u) => !!u, // all logged-in users
+  canViewGrowth:     (u) => !!u,
+  canSeeRawScores:   (u) => isAdminUser(u),
+  canEditAgenda:     (u) => isAdminUser(u),
+  canEditUsers:      (u) => isAdminUser(u),
+};
+
+// This patch replaces the existing agenda data shape with a Week → Topics hierarchy, adds an admin editor, and exposes helpers the Review page (Patch 3) will use for its cascading dropdowns.
+// ---------------------------------------------------------------------
+// AGENDA MODEL
+// data.agenda = [
+//   { week: 1, title: "Intro Week", topics: [
+//       { id: "t_abc", name: "My Favorite Hobby" },
+//       { id: "t_def", name: "A Place I Love" },
+//   ]},
+//   { week: 2, title: "...", topics: [...] },
+// ]
+// Sorted ascending by week. Topic ids are stable so reviews can reference them.
+// ---------------------------------------------------------------------
+function sortedAgenda(agenda) {
+  return [...(agenda || [])].sort((a,b) => (a.week||0) - (b.week||0));
+}
+function getWeek(agenda, weekNum) {
+  return (agenda || []).find(w => Number(w.week) === Number(weekNum)) || null;
+}
+function topicsForWeek(agenda, weekNum) {
+  const w = getWeek(agenda, weekNum);
+  return w ? (w.topics || []) : [];
+}
+function findTopic(agenda, weekNum, topicId) {
+  return topicsForWeek(agenda, weekNum).find(t => t.id === topicId) || null;
+}
+function newTopicId() {
+  return "t_" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+}
+
+
+// One-time migration: old agenda (flat list of strings / {title}) -> rich Week shape
+// Rich shape: { week, title, goal, items[], topics[], challenge, sneak_peek }
+// topics[] is the sparse sub-list used by Reviews dropdowns.
+// items[]  is the detailed session plan rendered on the Agenda page.
+function isRichAgenda(agenda) {
+  if (!Array.isArray(agenda) || !agenda.length) return false;
+  const first = agenda[0];
+  // Rich if any entry has items[], topics[], goal, challenge, or sneak_peek
+  return agenda.some(w =>
+    Array.isArray(w.items) || Array.isArray(w.topics) ||
+    w.goal || w.challenge || w.sneak_peek
+  );
+}
+function migrateAgenda(oldAgenda) {
+  if (!Array.isArray(oldAgenda)) return [];
+  if (isRichAgenda(oldAgenda)) return sortedAgenda(oldAgenda);
+  // Legacy: flat list of strings or {title} objects → collapse into Week 1
+  const topics = oldAgenda.map(item => ({
+    id: newTopicId(),
+    name: typeof item === "string" ? item : (item?.title || item?.name || "Untitled")
+  }));
+  return topics.length ? [{ week: 1, title: "Week 1", topics: [], items: topics.map(t=>({text:t.name})) }] : [];
+}
+
+// ---------------------------------------------------------------------
+// linkedKidsOf — canonical helper. Always returns an ARRAY of strings.
+// Handles: array, comma-separated string, single string, old singular field.
 // ---------------------------------------------------------------------
 function linkedKidsOf(user) {
-  if (!user || !user.linkedKid) return [];
-  if (Array.isArray(user.linkedKid)) return user.linkedKid.filter(Boolean);
-  return [user.linkedKid];
+  if (!user) return [];
+  // Canonical: array
+  if (Array.isArray(user.linkedKids)) return user.linkedKids.map(s=>String(s).trim()).filter(Boolean);
+  // Stored as comma-separated string (e.g. "Gupti, Poshya")
+  if (typeof user.linkedKids === "string" && user.linkedKids.trim())
+    return user.linkedKids.split(",").map(s => s.trim()).filter(Boolean);
+  // Legacy singular field
+  if (typeof user.linkedKid === "string" && user.linkedKid.trim())
+    return [user.linkedKid.trim()];
+  return [];
+}
+
+// Returns the member names a user is allowed to see data for.
+// Validates all names against the actual members list (case-insensitive).
+function visibleKidsFor(user, allMembers) {
+  if (!user) return [];
+  const memberNames = (allMembers || []).map(m => m.name);
+  const findMember = (candidate) =>
+    memberNames.find(n => n.toLowerCase() === String(candidate).toLowerCase().trim()) || null;
+
+  if (isAdminUser(user)) return memberNames;
+
+  if (isParentUser(user)) {
+    return linkedKidsOf(user)
+      .map(findMember)
+      .filter(Boolean); // only keep names that exist in members list
+  }
+
+  if (isKidUser(user)) {
+    // user.display is the canonical name (matches members[].name)
+    const candidate = user.display || (user.u.charAt(0).toUpperCase() + user.u.slice(1));
+    const matched = findMember(candidate);
+    return matched ? [matched] : [candidate];
+  }
+
+  return [];
+}
+
+// One kid can have 1 or 2 parents — this is the reverse lookup.
+// Returns array of parent user objects linked to a given kid name.
+function parentsOfKid(kidName, allUsers) {
+  if (!kidName || !Array.isArray(allUsers)) return [];
+  return allUsers.filter(u =>
+    u.role === ROLES.PARENT && linkedKidsOf(u).includes(kidName)
+  );
 }
 
 const LOGO_SRC = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/4QLyRXhpZgAATU0AKgAAAAgABAE7AAIAAAANAAABSodpAAQAAAABAAABWJydAAEAAAAaAAAC0OocAAcAAAEMAAAAPgAAAAAc6gAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAR3VwdGlfUG9zaHlhAAAABZADAAIAAAAUAAACppAEAAIAAAAUAAACupKRAAIAAAADNjQAAJKSAAIAAAADNjQAAOocAAcAAAEMAAABmgAAAAAc6gAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMjAyNjowMzoyOCAxMDoxNzo1NwAyMDI2OjAzOjI4IDEwOjE3OjU3AAAARwB1AHAAdABpAF8AUABvAHMAaAB5AGEAAAD/4QQfaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wLwA8P3hwYWNrZXQgYmVnaW49J++7vycgaWQ9J1c1TTBNcENlaGlIenJlU3pOVGN6a2M5ZCc/Pg0KPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyI+PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj48cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0idXVpZDpmYWY1YmRkNS1iYTNkLTExZGEtYWQzMS1kMzNkNzUxODJmMWIiIHhtbG5zOmRjPSJodHRwOi8vcHVybC5vcmcvZGMvZWxlbWVudHMvMS4xLyIvPjxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSJ1dWlkOmZhZjViZGQ1LWJhM2QtMTFkYS1hZDMxLWQzM2Q3NTE4MmYxYiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIj48eG1wOkNyZWF0ZURhdGU+MjAyNi0wMy0yOFQxMDoxNzo1Ny42MzU8L3htcDpDcmVhdGVEYXRlPjwvcmRmOkRlc2NyaXB0aW9uPjxyZGY6RGVzY3JpcHRpb24gcmRmOmFib3V0PSJ1dWlkOmZhZjViZGQ1LWJhM2QtMTFkYS1hZDMxLWQzM2Q3NTE4MmYxYiIgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIj48ZGM6Y3JlYXRvcj48cmRmOlNlcSB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPjxyZGY6bGk+R3VwdGlfUG9zaHlhPC9yZGY6bGk+PC9yZGY6U2VxPg0KCQkJPC9kYzpjcmVhdG9yPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg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";
@@ -147,20 +263,25 @@ return true;
 };
 
 // ===== DEFAULT DATA =====
-// NOTE: parent_gp and parent_kr use ARRAY linkedKid — this is the case
+// NOTE: parent_gp and parent_kr use ARRAY linkedKids — this is the case
 // the old code was broken for. linkedKidsOf() now normalizes both forms.
 const DEF_USERS = [
-  {u:"admin",p:"admin123",role:"admin",active:true,display:"Admin",emoji:"\ud83d\udee1\ufe0f"},
+  {u:"admin",p:"admin123",role:"admin",active:true,display:"zZ-Admin",emoji:"\ud83d\udee1\ufe0f"},
   {u:"advitha",p:"mintos",role:"kid",active:true,color:"#EF5350",emoji:"\ud83c\udf3a",display:"Advitha"},
   {u:"gupti",p:"mintos",role:"kid",active:true,color:"#42A5F5",emoji:"\ud83e\udd8b",display:"Gupti"},
   {u:"kruthika",p:"mintos",role:"kid",active:true,color:"#AB47BC",emoji:"\ud83c\udf38",display:"Kruthika"},
   {u:"mohnish",p:"mintos",role:"kid",active:true,color:"#FF7043",emoji:"\ud83e\udd81",display:"Mohnish"},
   {u:"poshya",p:"mintos",role:"kid",active:true,color:"#26A69A",emoji:"\ud83c\udf3f",display:"Poshya"},
   {u:"rithvik",p:"mintos",role:"kid",active:true,color:"#FFA726",emoji:"\u26a1",display:"Rithvik"},
-  {u:"parent_ad",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc69",display:"Advitha's Parent",linkedKid:["Advitha"]},
-  {u:"parent_gp",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc68",display:"Gupti & Poshya's Parent",linkedKid:["Gupti","Poshya"]},
-  {u:"parent_kr",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc69",display:"Kruthika & Rithvik's Parent",linkedKid:["Kruthika","Rithvik"]},
-  {u:"parent_md",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc68",display:"Mohnish's Parent",linkedKid:["Mohnish"]},
+  {u:"mintos",p:"mintos",role:"kid",active:true,color:"#EF5350",emoji:"\ud83d\udc68",display:"zZ-Minto"},
+  {u:"dad_ad",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc70",display:"zDAD-Advitha",linkedKids:["Advitha"]},
+  {u:"mom_ad",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc70",display:"zMOM-Advitha",linkedKids:["Advitha"]},
+  {u:"dad_gp",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc68",display:"zDAD-Gupti-Poshya",linkedKids:["Gupti","Poshya"]},
+  {u:"mom_gp",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc68",display:"zMOM-Gupti-Poshya",linkedKids:["Gupti","Poshya"]},
+  {u:"dad_kr",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc69",display:"zDAD-Kruthika-Rithvik",linkedKids:["Kruthika","Rithvik"]},
+  {u:"mom_kr",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc69",display:"zMOM-Kruthika-Rithvik",linkedKids:["Kruthika","Rithvik"]},
+  {u:"dad_md",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc67",display:"zDAD-Mohnish-Dhrish",linkedKids:["Mohnish"]},
+  {u:"mom_md",p:"mintos",role:"parent",active:true,emoji:"\ud83d\udc67",display:"zMOM-Mohnish-Dhrish",linkedKids:["Mohnish"]},
 ];
 const DEF_MEMBERS = [
 {name:"Advitha",color:"#EF5350",emoji:"\ud83c\udf3a",bio:"Courageous and confident!"},
@@ -316,6 +437,136 @@ sneak_peek: "Next week… let’s organize ideas like pros and build powerful sp
 }
 ];
 
+// ---------------------------------------------------------------------
+// MEASURES OF SUCCESS — the 5 fixed categories.
+// Each review stores: scores[measureId] = "good" | "improve"
+// ---------------------------------------------------------------------
+const MEASURES = [
+  { id: "confidence",  label: "Confidence",
+    bullets: ["Stands straight, eye contact","Speaks without hesitation","Shows confidence"] },
+  { id: "clarity",     label: "Clarity",
+    bullets: ["Speaks clearly and audibly","Words are understandable","Ideas explained well"] },
+  { id: "organization",label: "Organization",
+    bullets: ["Clear beginning","Logical middle","Strong ending"] },
+  { id: "engagement",  label: "Audience Engagement",
+    bullets: ["Keeps audience interested","Uses gestures/expressions","Effective voice variation"] },
+  { id: "fluency",     label: "Fluency",
+    bullets: ["Smooth speech","Few filler words","Good pacing"] },
+];
+const RATING = { GOOD: "good", IMPROVE: "improve" };
+
+// Uniqueness key: one review per Kid + Week + Topic + Reviewer
+function reviewKey(kid, week, topicId, reviewerU) {
+  return [kid, Number(week), topicId, reviewerU].join("::");
+}
+function findExistingReview(reviews, kid, week, topicId, reviewerU) {
+  const k = reviewKey(kid, week, topicId, reviewerU);
+  return (reviews || []).find(r => reviewKey(r.kid, r.week, r.topicId, r.byUser) === k) || null;
+}
+
+//  "How Did I Do" Aggregated View
+// Majority-vote aggregation per (Kid + Week + Topic + Measure), Kid→Week→Topic collapsible hierarchy, sorted by Kid → Week → Topic, admin can delete underlying reviews.
+// ---------------------------------------------------------------------
+// AGGREGATION — majority vote across all reviewers for a given slot.
+// Ties favor "good" per spec.
+// ---------------------------------------------------------------------
+function aggregateMeasure(reviewsForSlot, measureId) {
+  let good = 0, improve = 0;
+  reviewsForSlot.forEach(r => {
+    const v = r.scores && r.scores[measureId];
+    if (v === RATING.GOOD) good++;
+    else if (v === RATING.IMPROVE) improve++;
+  });
+  if (good === 0 && improve === 0) return null; // no data
+  if (improve > good) return RATING.IMPROVE;
+  return RATING.GOOD; // tie -> good
+}
+
+// Bucket reviews into Kid -> Week -> TopicId -> [reviews]
+// Filters out legacy reviews that lack the new scores/topicId fields.
+function groupReviews(reviews) {
+  const tree = {};
+  (reviews || []).forEach(r => {
+    if (!r || !r.kid || !r.topicId || !r.scores) return; // skip legacy
+    const kid = r.kid, wk = Number(r.week) || 0, tp = r.topicId;
+    tree[kid]            = tree[kid]            || {};
+    tree[kid][wk]        = tree[kid][wk]        || {};
+    tree[kid][wk][tp]    = tree[kid][wk][tp]    || { topicName: r.topicName || "", items: [] };
+    tree[kid][wk][tp].items.push(r);
+    // Prefer a non-empty topicName if any reviewer captured it.
+    if (!tree[kid][wk][tp].topicName && r.topicName) tree[kid][wk][tp].topicName = r.topicName;
+  });
+  return tree;
+}
+
+// Produces the final display rows for a slot: [{measure, label, result}]
+function aggregatedMeasuresFor(reviewsForSlot) {
+  return MEASURES.map(m => ({
+    id: m.id,
+    label: m.label,
+    result: aggregateMeasure(reviewsForSlot, m.id), // "good" | "improve" | null
+  }));
+}
+
+
+// Growth Dashboard (Per Kid)
+// Hidden cumulative scoring, 5-line chart (one per measure), kid selector, admin-only numeric visibility.
+// scoring helpers
+// ---------------------------------------------------------------------
+// SCORING (internal, hidden from non-admins)
+//   Good        = +5
+//   Can Improve = -3
+// Cumulative per Kid + Measure across Weeks (running total).
+// A "week result" per measure uses the same majority-vote aggregation
+// as How-Did-I-Do, collapsing all topics in that week into a single
+// Good/Improve verdict per measure before scoring.
+// ---------------------------------------------------------------------
+const SCORE_GOOD    = 5;
+const SCORE_IMPROVE = -3;
+
+function scoreForResult(result) {
+  if (result === RATING.GOOD)    return SCORE_GOOD;
+  if (result === RATING.IMPROVE) return SCORE_IMPROVE;
+  return 0;
+}
+
+// For a kid, return: { weeks: [1,2,3,...], series: { measureId: [cum1,cum2,cum3,...] } }
+function buildGrowthSeries(reviews, kidName) {
+  const kidReviews = (reviews || []).filter(r =>
+    r && r.kid === kidName && r.scores //&& r.topicId
+  );
+  if (!kidReviews.length) return { weeks: [], series: {} };
+
+  // Group by week
+  const byWeek = {};
+  kidReviews.forEach(r => {
+    const w = Number(r.week) || 0;
+    (byWeek[w] = byWeek[w] || []).push(r);
+  });
+  const weeks = Object.keys(byWeek).map(Number).sort((a,b)=>a-b);
+
+  // For each week, compute one verdict per measure via majority vote
+  // across ALL reviews in that week (all topics, all reviewers).
+  const series = {};
+  MEASURES.forEach(m => { series[m.id] = []; });
+
+  // Default offsets so lines start spread apart (index-based, not score-based)
+	const DEFAULT_OFFSETS = { fluency: 7, engagement: 6, organization: 5, clarity: 4, confidence: 3 };
+	const running = {};
+	MEASURES.forEach(m => { running[m.id] = DEFAULT_OFFSETS[m.id] || 0; });
+
+  weeks.forEach(w => {
+    const weekReviews = byWeek[w];
+    MEASURES.forEach(m => {
+      const verdict = aggregateMeasure(weekReviews, m.id); // good|improve|null
+      running[m.id] += scoreForResult(verdict);
+      series[m.id].push(running[m.id]);
+    });
+  });
+
+  return { weeks, series };
+}
+
 const DEF_RESOURCES = [
 {title:"News for Kids",url:"https://newsforkids.net/",icon:"📰",desc:"Kid-friendly news articles"},
 {title:"The Hindu",url:"https://www.thehindu.com/",icon:"🗞️",desc:"Quality news resource"},
@@ -362,7 +613,8 @@ return <div className={className||""} style={{background:bg||"#fff",borderRadius
 function Inp({...props}) { return <input {...props} style={{width:"100%",padding:"10px 12px",border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:14,outline:"none",marginBottom:8,boxSizing:"border-box",...(props.style||{})}} />; }
 function Sel({children,...props}) { return <select {...props} style={{width:"100%",padding:"10px 12px",border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:14,outline:"none",marginBottom:8,boxSizing:"border-box",...(props.style||{})}}>{children}</select>; }
 function Btn({children,color,...props}) { return <button {...props} style={{padding:"10px 18px",border:"none",borderRadius:10,fontFamily:"inherit",fontSize:13,fontWeight:700,cursor:"pointer",color:"#fff",background:color||"linear-gradient(135deg,#3da33d,#1b7a1b)",transition:".15s",whiteSpace:"nowrap",...(props.style||{})}}>{children}</button>; }
-function Txt({children,...props}) { return <textarea {...props} style={{width:"100%",padding:10,border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:13,outline:"none",marginBottom:8,resize:"vertical",minHeight:60,boxSizing:"border-box",...(props.style||{})}}>{children}</textarea>; }
+function Txt(props) { return <textarea {...props} style={{width:"100%",padding:10,border:"2px solid #d1fae5",borderRadius:10,fontFamily:"inherit",fontSize:13,outline:"none",marginBottom:8,resize:"vertical",minHeight:60,boxSizing:"border-box",...(props.style||{})}} />; }
+
 
 // ===== MAIN APP =====
 function App() {
@@ -430,6 +682,32 @@ return()=>clearInterval(iv);
 
 const saveKey=async(key,val)=>{await S.set("mts_"+key,val);setData(p=>({...p,[key]:val}));};
 
+// ---- One-time role migration for legacy users ----
+// Any user without a role field gets inferred: has linkedKids => parent, else kid.
+useEffect(() => {
+  if (!data.users || !data.users.length) return;
+  const needsFix = data.users.some(u => !u.role);
+  if (!needsFix) return;
+  const migrated = data.users.map(u => {
+    if (u.role) return u;
+    const kids = linkedKidsOf(u);
+    const role = u.u === "admin" ? ROLES.ADMIN
+               : kids.length      ? ROLES.PARENT
+               :                    ROLES.KID;
+    return { ...u, role, linkedKids: kids };
+  });
+  S.set("mts_users", migrated).then(()=>setData(p=>({...p, users: migrated})));
+}, [data.users]);
+
+// Run the agenda migration on load — only if data is in old flat shape
+useEffect(() => {
+  if (!data.agenda || !data.agenda.length) return;
+  if (isRichAgenda(data.agenda)) return; // already correct shape, do nothing
+  const migrated = migrateAgenda(data.agenda);
+  S.set("mts_agenda", migrated).then(()=>setData(p=>({...p, agenda: migrated})));
+}, [data.agenda]);
+
+
 const track=async(type,detail)=>{
 const today=new Date().toISOString().slice(0,10);
 const newAn=await S.mergeAnalytics(an=>{
@@ -445,7 +723,10 @@ const doLogin=async()=>{
 const u=loginForm.u.trim().toLowerCase(),p=loginForm.p;
 const found=data.users.find(x=>x.u===u&&x.p===p&&x.active);
 if(!found){showToast("Wrong username or password!","err");return;}
-setUser(found);sessionRef.current={start:Date.now(),pages:[]};
+const kids=linkedKidsOf(found);
+const inferredRole=found.role||(found.u==="admin"?"admin":kids.length?"parent":"kid");
+const normalizedUser={...found,role:inferredRole,linkedKids:kids};
+setUser(normalizedUser);sessionRef.current={start:Date.now(),pages:[]};
 const newAn=await S.mergeAnalytics(an=>{
 an.logins=[...(an.logins||[]),{user:u,date:new Date().toISOString().slice(0,10),ts:Date.now(),device:DEVICE_ID}];
 an.activities=[...(an.activities||[]),{type:"login",detail:u,user:u,date:new Date().toLocaleString(),ts:Date.now(),device:DEVICE_ID}];
@@ -481,13 +762,16 @@ if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"cen
 
 if(!user) return <LoginScreen loginForm={loginForm} setLoginForm={setLoginForm} doLogin={doLogin} toast={toast} />;
 
+// ===== navigation pages =====
 const navPages=[
 {id:"home",icon:"\ud83c\udfe0",label:"Home",roles:["kid","parent","admin"]},
 {id:"team",icon:"\ud83d\udc65",label:"Team",roles:["kid","parent","admin"]},
 {id:"bragboard",icon:"\ud83e\udd29",label:"Jar of JOYs",roles:["kid","parent","admin"]},
 {id:"agenda",icon:"\ud83d\udccb",label:"Agenda",roles:["kid","parent","admin"]},
 {id:"meetings",icon:"\ud83d\udcc5",label:"Meetings",roles:["kid","parent","admin"]},
-{id:"reviews",icon:"\u2b50",label:"Reviews",roles:["admin"]},
+{id:"reviews",icon:"\u2b50",label:"Reviews",roles:["parent","admin"]},
+{id:"howdidido",icon:"\ud83c\udfaf",label:"How Did I Do",roles:["kid","parent","admin"]},
+{id:"growth",icon:"\ud83d\udcc8",label:"My Growth",roles:["kid","parent","admin"]},
 {id:"walloffame",icon:"\ud83c\udfc6",label:"Wall of Fame",roles:["admin"]},
 {id:"appreciation",icon:"\ud83c\udf1f",label:"Stars",roles:["admin"]},
 {id:"studio",icon:"\ud83c\udfa4",label:"Studio",roles:["admin"]},
@@ -514,7 +798,7 @@ return (
 {menuOpen?"\u2715":"\u2630"}
 </button>
 <div style={{display:"flex",alignItems:"center",gap:6}}>
-<span onClick={()=>setShowPwModal(!showPwModal)} title="Click to change password" style={{background:user.role==="admin"?"#fce7f3":user.role==="parent"?"#fef3c7":"#e9f7e9",padding:"3px 8px",borderRadius:12,fontSize:10,fontWeight:700,color:user.role==="admin"?"#be185d":user.role==="parent"?"#92400e":"#1b7a1b",cursor:"pointer"}}>{user.emoji||"\ud83d\udc64"} {user.display||user.u}</span>
+<span onClick={()=>setShowPwModal(!showPwModal)} title="Click to change password" style={{background:user.role==="admin"?"#fce7f3":user.role==="parent"?"#fef3c7":"#e9f7e9",padding:"3px 8px",borderRadius:12,fontSize:10,fontWeight:700,color:user.role==="admin"?"#be185d":user.role==="parent"?"#92400e":"#1b7a1b",cursor:"pointer"}}>{user.emoji||"\ud83d\udc64"} {user.name||user.display||user.u} </span>
 <button onClick={doLogout} style={{background:"none",border:"2px solid #ef4444",color:"#ef4444",padding:"3px 8px",borderRadius:8,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Logout</button>
 </div>
 </nav>
@@ -544,8 +828,10 @@ return (
 {page==="studio" && <StudioPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
 {page==="feedback" && <FeedbackPage data={data} saveKey={saveKey} user={user} showToast={showToast} />}
 {page==="reviews" && <ReviewsPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
+{page==="howdidido" && (<HowDidIDoPage data={data} user={user} saveKey={saveKey} showToast={showToast}/>)}
+{page==="growth" && <GrowthDashboardPage data={data} user={user}/>}
 {page==="walloffame" && <WallOfFamePage data={data} />}
-{page==="agenda" && <AgendaPage data={data} saveKey={saveKey} user={user} showToast={showToast} />}
+{page==="agenda" && <AgendaPage data={data} saveKey={saveKey} user={user} showToast={showToast}/>}
 {page==="meetings" && <MeetingsPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
 {page==="bragboard" && <BragBoardPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} setData={setData} />}
 {page==="appreciation" && <AppreciationPage data={data} saveKey={saveKey} user={user} showToast={showToast} track={track} />}
@@ -579,6 +865,17 @@ return (
 function LoginScreen({loginForm,setLoginForm,doLogin,toast}) {
 return (
 <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(160deg,#e9f7e9,#b6e6b6 40%,#78d078)",fontFamily:"'Nunito',sans-serif"}}>
+
+<div style={{background:"linear-gradient(135deg,#1b7a1b,#3da33d 50%,#6fcf6f)",borderRadius:20,padding:32,color:"#fff",display:"flex",alignItems:"center",gap:24,marginBottom:20,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
+<img src={COACH_SRC} alt="Mr. MinTo" style={{width:140,borderRadius:14,filter:"drop-shadow(0 6px 12px rgba(0,0,0,.2))",position:"relative",zIndex:1}} />
+<div style={{flex:1,minWidth:260}}>
+<h2 style={{fontWeight:900,fontSize:28,marginBottom:6}}>Welcome to MinTos Club! 🎤</h2>
+<p style={{fontSize:14,opacity:.92,lineHeight:1.6}}>MinTos is a small-group program designed to help kids build confidence, communication skills, and creativity through fun and interactive speaking activities.</p>
+<p style={{marginTop:6,fontSize:14,opacity:.92,lineHeight:1.6}}>Through games, talking about articles, short speeches, and group activities, kids learn to organize thoughts, speak clearly, and express themselves at a comfortable pace.</p>
+<p style={{marginTop:8,fontWeight:800,fontSize:16}}>The focus is on enjoying the process and building self-confidence! ✨</p>
+</div>
+</div>
+
 <div style={{background:"#fff",borderRadius:20,padding:"40px 34px",width:420,maxWidth:"92vw",boxShadow:"0 8px 32px rgba(30,120,30,.14)",textAlign:"center"}}>
 <img src={LOGO_SRC} alt="MinTos" style={{width:130,marginBottom:10,filter:"drop-shadow(0 3px 8px rgba(0,0,0,.12))"}} />
 <h1 style={{fontWeight:900,fontSize:28,color:"#1b7a1b"}}>MinTos Club</h1>
@@ -615,7 +912,12 @@ return (<div style={{animation:"fadeIn .4s ease"}}>
 </div>
 <Card title="🎤🔥 MinTos Anthem" bg="linear-gradient(135deg,#fffbeb,#fef3c7)" border="#fbbf24">
 <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"3px 14px",fontSize:14,lineHeight:1.9}}>
-{[["Friend:","Who are we?"],["Kids:","MIN-TOS! 🚀"],["Friend:","What do we do?"],["Kids:","WE SPEAK AND SHINE! 🌟"],["Friend:","How do we grow?"],["Kids:","WE HELP EACH OTHER! 🤝"],["Friend:","Are we ready?"],["Kids:","LET'S GO!!! 🎉🎤"]].map(([c,r],i)=><><span key={i+"c"} style={{fontWeight:700,color:"#d97706"}}>{c}</span><span key={i+"r"} style={{fontWeight:800,color:"#1b7a1b"}}>{r}</span></>)}
+{[["Friend:","Who are we?"],["Kids:","MIN-TOS! 🚀"],["Friend:","What do we do?"],["Kids:","WE SPEAK AND SHINE! 🌟"],["Friend:","How do we grow?"],["Kids:","WE HELP EACH OTHER! 🤝"],["Friend:","Are we ready?"],["Kids:","LET'S GO!!! 🎉🎤"]].map(([c,r],i)=>(
+  <React.Fragment key={i}>
+    <span style={{fontWeight:700,color:"#d97706"}}>{c}</span>
+    <span style={{fontWeight:800,color:"#1b7a1b"}}>{r}</span>
+  </React.Fragment>
+))}
 </div>
 </Card>
 <Card title="🎶🎶 MinTos Rap-Chant 🎶🎶">
@@ -811,179 +1113,1033 @@ return (<div style={{animation:"fadeIn .4s"}}>
 }
 
 // ===== REVIEWS PAGE =====
+// Hard role gate — kids must never reach the submission UI even via deep link.
+// Removed Topic dropdown, enforce one review per user-per-week, prevent self-review
+
 function ReviewsPage({data,saveKey,user,showToast,track}) {
-const [form, setForm] = useState({kid:"",recId:"",feedback:"",appreciation:"",ratings:{}});
-const [adminEdit, setAdminEdit] = useState(null);
-const isAdmin = user.role==="admin";
-const tasks = data.tasks||DEF_TASKS;
-const config = data.config||DEF_CONFIG;
+  const agenda = sortedAgenda(data.agenda || []);
+  const members = data.members || [];
+  const reviews = data.reviews || [];
+  const [form, setForm] = useState({ kid:"", week:"", scores:{} });
+  const [openWeeks, setOpenWeeks] = useState({});
 
-const myLinkedKids = linkedKidsOf(user);
-  
-const setStars = (rubricId, val) => setForm({...form, ratings:{...form.ratings, [rubricId]:val}});
+  // topics/topicId no longer used — one review per user+week only
 
-const selectedTask = form.task ? tasks.find(t=>t.id===form.task) : null;
-const allRubrics = selectedTask ? selectedTask.rubrics : (tasks.find(t=>t.id==="speakto")?.rubrics || []);
+  // Gate removed — all logged-in users can submit reviews
+
+  // Show ALL users in the dropdown EXCEPT the logged-in user (no self-reviews).
+  const allUsers = (data.users && data.users.length ? data.users : USERS) || [];
+  const loggedInDisplay = user.display || user.u;
+  const selectableKids = allUsers
+    .filter(u => u.active !== false)
+    .map(u => u.display || u.u)
+    .filter(name => name !== loggedInDisplay)
+    .sort((a, b) => a.localeCompare(b));
+
+	// Auto-select if only one kid available
+	useEffect(() => {
+	  if (selectableKids.length === 1 && !form.kid) {
+		setForm(f => ({ ...f, kid: selectableKids[0] }));
+	  }
+	}, [selectableKids.join("|")]); // eslint-disable-line
+
+  const setScore = (measureId, val) =>
+    setForm(f => ({ ...f, scores: { ...f.scores, [measureId]: val }}));
+
+  const allMeasuresAnswered = MEASURES.every(m => form.scores[m.id]);
 
 const submit = async () => {
-if (!form.kid) { showToast("Select a child!","err"); return; }
-if (!form.feedback && !form.appreciation) { showToast("Write feedback or appreciation!","err"); return; }
-const avgVals = Object.values(form.ratings).filter(v=>v>0);
-const overall = avgVals.length ? Math.round(avgVals.reduce((a,b)=>a+b,0)/avgVals.length*10)/10 : 0;
-const reviews = [...data.reviews];
-reviews.unshift({id:Date.now().toString(36)+Math.random().toString(36).substr(2,4),kid:form.kid,recId:form.recId||null,task:form.task||"",ratings:{...form.ratings},overall,feedback:form.feedback,appreciation:form.appreciation,by:user.display||user.u,byUser:user.u,role:user.role,date:new Date().toLocaleString(),ts:Date.now(),visible:true});
-await saveKey("reviews", reviews);
-track("review", form.kid+" by "+(user.display||user.u));
-setForm({kid:"",recId:"",feedback:"",appreciation:"",ratings:{},task:""});
-showToast("Review submitted! ⭐");
-};
+    if (!form.kid)  return showToast("Pick a user","err");
+    if (!form.week) return showToast("Pick a week","err");
+    if (!allMeasuresAnswered) return showToast("Rate all 5 measures","err");
 
-const toggleVisibility = async (id) => {
-const reviews = data.reviews.map(r => r.id===id ? {...r, visible:!r.visible} : r);
-await saveKey("reviews", reviews);
-showToast("Visibility toggled");
-};
-
-const kidRecs = data.recordings.filter(r => r.speaker===form.kid);
-
-// For parents: anonymize other parents' reviews
-const getReviewBy = (rv) => {
-if (isAdmin) return rv.by + " (" + rv.byUser + ")";
-if (user.role==="parent" && rv.byUser === user.u) return "You";
-if (user.role==="parent") return "A Parent Observer 👀";
-return rv.by;
-};
-
-const visibleReviews = data.reviews.filter(rv => {
-if (isAdmin) return true;
-if (rv.visible === false) return false;
-// Kids can only see reviews about themselves
-if (user.role === "kid") return rv.kid === user.display;
-// Parents can only see reviews about their linked kid + their own reviews
-if (user.role === "parent") {
-      // (a) any review I submitted, for any kid
-      if (rv.byUser === user.u) return true;
-      // (b) any review my linked kids received, from anyone
-      if (myLinkedKids.includes(rv.kid)) return true;
-      return false;
+    // Safety: block self-review even if form.kid was somehow set
+    if (form.kid === loggedInDisplay) {
+      return showToast("You cannot review yourself 🙃","err");
     }
-// Check per-parent masking from config
-const vis = config.reviewVisibility || {};
-if (vis[rv.byUser] === false && rv.byUser !== user.u) return false;
-return true;
-});
 
-return (<div style={{animation:"fadeIn .4s"}}>
-<h1 style={{fontWeight:900,fontSize:26,color:"#1b7a1b",marginBottom:4}}>⭐ {user.role==="kid" ? "My Reviews" : "Parent Reviews"}</h1>
-<p style={{fontSize:13,color:"#6b7280",marginBottom:16}}>{user.role==="kid" ? "See what your coaches and parents say about you! Keep growing! 🌟" : "Provide constructive and appreciative feedback based on defined measures of success."}</p>
+    // Enforce: one review per reviewee + week + reviewer (ignore topic)
+    const existing = reviews.find(r =>
+      r && r.kid === form.kid
+      && Number(r.week) === Number(form.week)
+      && r.byUser === user.u
+    );
+    if (existing && !isAdminUser(user)) {
+      return showToast("You already submitted a review for " + form.kid + " for Week " + form.week,"err");
+    }
 
-{(user.role === "parent" || isAdmin) && <Card title="⭐ Submit a Review" bg="linear-gradient(135deg,#fffbeb,#fef9c3)" border="#fbbf24">
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-<Sel value={form.kid} onChange={e=>setForm({...form,kid:e.target.value})}><option value="">-- Select Child --</option>{data.members.map(m=><option key={m.name} value={m.name}>{m.emoji} {m.name}</option>)}</Sel>
-<Sel value={form.task||""} onChange={e=>setForm({...form,task:e.target.value,ratings:{}})}><option value="">-- Task/Role --</option>{tasks.map(t=><option key={t.id} value={t.id}>{t.icon} {t.name}</option>)}</Sel>
-</div>
-{form.kid && <Sel value={form.recId||""} onChange={e=>setForm({...form,recId:e.target.value})}><option value="">-- General Review --</option>{kidRecs.map(r=><option key={r.id} value={r.id}>{r.title} ({r.date})</option>)}</Sel>}
+    // Resolve the target user's username so matching survives display-name changes.
+    const targetUserRec = allUsers.find(u => (u.display || u.u) === form.kid);
+    const record = {
+      id: existing ? existing.id : ("rv_" + Date.now().toString(36) + Math.random().toString(36).slice(2,5)),
+      kid: form.kid,
+      kidU: targetUserRec ? targetUserRec.u : "",
+      week: Number(form.week),
+      topicId: "",
+      topicName: "",
+      scores: form.scores,
+      byUser: user.u,
+      byRole: user.role,
+      ts: Date.now(),
+      createdAt: new Date().toLocaleString(),
+    };
+    const next = existing
+      ? reviews.map(r => r.id === existing.id ? record : r)
+      : [...reviews, record];
+    await saveKey("reviews", next);
+    if (track) track("reviewSubmit", form.kid + " W" + form.week);
+    showToast(existing ? "Review updated ✅" : "Review submitted ✅","ok");
+    setForm({ kid: "", week: "", scores: {} });
+  };
 
-<div style={{margin:"10px 0"}}>
-<div style={{fontSize:12,fontWeight:800,color:"#92400e",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>Measures of Success {selectedTask ? "for "+selectedTask.name : ""}</div>
-{allRubrics.map(rb => <div key={rb.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:"1px solid rgba(0,0,0,.05)"}}>
-<span style={{minWidth:170,fontWeight:700,fontSize:12}}>{rb.icon} {rb.label}</span>
-<div style={{display:"flex",gap:3}}>
-{[1,2,3,4,5].map(s => <button key={s} onClick={()=>setStars(rb.id,s)} style={{fontSize:22,background:"none",border:"none",cursor:"pointer",filter:(form.ratings[rb.id]||0)>=s?"none":"grayscale(1) opacity(.3)",transition:".15s"}}>⭐</button>)}
-</div>
-<span style={{fontSize:10,color:"#6b7280",maxWidth:180}}>{rb.desc}</span>
-</div>)}
-</div>
+  // ----- visible reviews (parent sees own, admin sees all) -----
+  const myReviews = isAdminUser(user)
+    ? reviews
+    : reviews.filter(r => r.byUser === user.u);
 
-<textarea value={form.feedback} onChange={e=>setForm({...form,feedback:e.target.value})} placeholder="Constructive feedback — what did they do well? What can improve?" style={{width:"100%",padding:10,border:"2px solid #fde68a",borderRadius:9,fontFamily:"inherit",fontSize:13,minHeight:60,resize:"vertical",outline:"none",marginBottom:8}} />
-<textarea value={form.appreciation} onChange={e=>setForm({...form,appreciation:e.target.value})} placeholder="Appreciation — share something positive and encouraging..." style={{width:"100%",padding:10,border:"2px solid #fde68a",borderRadius:9,fontFamily:"inherit",fontSize:13,minHeight:60,resize:"vertical",outline:"none",marginBottom:8}} />
-<Btn onClick={submit} color="linear-gradient(135deg,#f59e0b,#d97706)">⭐ Submit Review</Btn>
-</Card>}
+  // Group by week, sort kids alphabetically within
+  const byWeek = {};
+  myReviews.forEach(r => {
+    const w = r.week || 0;
+    if (!byWeek[w]) byWeek[w] = [];
+    byWeek[w].push(r);
+  });
+  Object.values(byWeek).forEach(list =>
+    list.sort((a,b) => (a.kid||"").localeCompare(b.kid||""))
+  );
+  const weekKeys = Object.keys(byWeek).map(Number).sort((a,b)=>a-b);
 
-{isAdmin && <Card title="🔒 Review Visibility Controls (Admin)">
-<p style={{fontSize:12,color:"#6b7280",marginBottom:10}}>Mask or show reviews per parent reviewer. Hidden reviews are invisible to other parents.</p>
-<table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-<thead><tr style={{background:"#e9f7e9"}}><th style={{padding:8,textAlign:"left"}}>Reviewer</th><th style={{padding:8}}>Reviews</th><th style={{padding:8}}>Visible to Parents</th></tr></thead>
-<tbody>
-{data.users.filter(u=>u.role==="parent").map(pu => {
-const cnt = data.reviews.filter(r=>r.byUser===pu.u).length;
-const vis = (config.reviewVisibility||{})[pu.u] !== false;
-return <tr key={pu.u}><td style={{padding:8}}>{pu.emoji} {pu.display}</td><td style={{padding:8,textAlign:"center"}}>{cnt}</td>
-<td style={{padding:8,textAlign:"center"}}><button onClick={async()=>{const c={...config};c.reviewVisibility={...(c.reviewVisibility||{})};c.reviewVisibility[pu.u]=!vis;await saveKey("config",c);showToast(vis?"Hidden":"Shown");}} style={{width:40,height:22,borderRadius:11,border:"none",cursor:"pointer",background:vis?"#3da33d":"#ccc",position:"relative",transition:".2s"}}><span style={{position:"absolute",width:18,height:18,borderRadius:"50%",background:"#fff",top:2,left:vis?20:2,transition:".2s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}} /></button></td></tr>;
-})}
-</tbody>
-</table>
-<div style={{marginTop:12}}>
-<p style={{fontSize:12,fontWeight:700,marginBottom:6}}>Individual Review Toggle:</p>
-{data.reviews.slice(0,20).map(rv => <div key={rv.id} style={{display:"flex",alignItems:"center",gap:8,padding:6,borderBottom:"1px solid #f3f3f3",fontSize:12}}>
-<button onClick={()=>toggleVisibility(rv.id)} style={{width:36,height:20,borderRadius:10,border:"none",cursor:"pointer",background:rv.visible!==false?"#3da33d":"#ccc",position:"relative",transition:".2s",flexShrink:0}}><span style={{position:"absolute",width:16,height:16,borderRadius:"50%",background:"#fff",top:2,left:rv.visible!==false?18:2,transition:".2s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}} /></button>
-<span>{rv.kid} — by {rv.by} — {"⭐".repeat(Math.round(rv.overall))} — {rv.date}</span>
-</div>)}
-</div>
-</Card>}
+  const toggleWeek = (w) => setOpenWeeks(s => ({ ...s, [w]: !s[w] }));
 
-<Card title="📜 All Reviews">
-{visibleReviews.length===0 && <p style={{color:"#bbb",textAlign:"center",padding:14}}>No reviews yet.</p>}
-{visibleReviews.slice(0,30).map(rv => {
-const stars = "⭐".repeat(Math.round(rv.overall))+"☆".repeat(5-Math.round(rv.overall));
-const taskObj = tasks.find(t=>t.id===rv.task);
-return <div key={rv.id} style={{background:"#fff",borderRadius:10,padding:12,marginBottom:8,borderLeft:"4px solid #fbbf24"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><strong>{rv.kid}</strong><span style={{color:"#d97706",fontSize:14}}>{stars} ({rv.overall}/5)</span></div>
-<div style={{fontSize:10,color:"#999",marginTop:2}}>by {getReviewBy(rv)} · {rv.date} {taskObj ? "· "+taskObj.icon+" "+taskObj.name : ""}</div>
-{rv.feedback && <div style={{fontSize:12,marginTop:6,lineHeight:1.5}}><strong>Feedback:</strong> {rv.feedback}</div>}
-{rv.appreciation && <div style={{fontSize:12,marginTop:4,lineHeight:1.5,color:"#1b7a1b"}}><strong>Appreciation:</strong> {rv.appreciation}</div>}
-{rv.ratings && taskObj && <div style={{fontSize:11,color:"#6b7280",marginTop:5}}>{taskObj.rubrics.map(rb=>{const v=rv.ratings[rb.id];return v?`${rb.icon} ${rb.label}: ${"⭐".repeat(v)}`:null;}).filter(Boolean).join(" · ")}</div>}
-{isAdmin && adminEdit!==rv.id && <div style={{display:"flex",gap:6,marginTop:8}}>
-<Btn onClick={()=>setAdminEdit(rv.id)} color="#6b7280" style={{padding:"4px 10px",fontSize:10}}>✏️ Edit</Btn>
-<Btn onClick={async()=>{if(!window.confirm("Delete this review?"))return;const revs=data.reviews.filter(r=>r.id!==rv.id);await saveKey("reviews",revs);showToast("Review deleted! 🗑️");}} color="#ef4444" style={{padding:"4px 10px",fontSize:10}}>🗑️ Delete</Btn>
-</div>}
-{isAdmin && adminEdit===rv.id && (() => {
-const editTask = rv.task ? tasks.find(t=>t.id===rv.task) : null;
-const editRubrics = editTask ? editTask.rubrics : (tasks.find(t=>t.id==="speakto")?.rubrics || []);
-return <div style={{marginTop:10,padding:12,background:"#fffbeb",borderRadius:10,border:"2px solid #fbbf24"}}>
-<div style={{fontWeight:800,fontSize:13,color:"#92400e",marginBottom:8}}>✏️ Admin Edit — Full CRUD Override</div>
-<label style={{fontSize:11,fontWeight:700,color:"#888"}}>Feedback:</label>
-<textarea defaultValue={rv.feedback||""} id={"ae_fb_"+rv.id} style={{width:"100%",padding:8,border:"2px solid #fde68a",borderRadius:8,fontFamily:"inherit",fontSize:12,minHeight:50,resize:"vertical",outline:"none",marginBottom:6,boxSizing:"border-box"}} />
-<label style={{fontSize:11,fontWeight:700,color:"#888"}}>Appreciation:</label>
-<textarea defaultValue={rv.appreciation||""} id={"ae_ap_"+rv.id} style={{width:"100%",padding:8,border:"2px solid #fde68a",borderRadius:8,fontFamily:"inherit",fontSize:12,minHeight:50,resize:"vertical",outline:"none",marginBottom:6,boxSizing:"border-box"}} />
-<div style={{fontSize:11,fontWeight:800,color:"#92400e",marginBottom:6}}>Star Ratings:</div>
-{editRubrics.map(rb => <div key={rb.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0"}}>
-<span style={{minWidth:150,fontWeight:700,fontSize:11}}>{rb.icon} {rb.label}</span>
-<div style={{display:"flex",gap:2}} id={"ae_stars_"+rv.id+"_"+rb.id}>
-{[1,2,3,4,5].map(s => <button key={s} data-rubric={rb.id} data-val={s}
-onClick={e => {
-const container = e.currentTarget.parentElement;
-container.querySelectorAll("button").forEach((b,idx)=>b.style.filter=(idx<s)?"none":"grayscale(1) opacity(.3)");
-container.setAttribute("data-selected",s);
-}}
-style={{fontSize:18,background:"none",border:"none",cursor:"pointer",filter:(rv.ratings?.[rb.id]||0)>=s?"none":"grayscale(1) opacity(.3)",transition:".15s"}}>⭐</button>)}
-</div>
-</div>)}
-<div style={{display:"flex",gap:6,marginTop:8}}>
-<Btn onClick={async()=>{
-const newFb=document.getElementById("ae_fb_"+rv.id)?.value||"";
-const newAp=document.getElementById("ae_ap_"+rv.id)?.value||"";
-const newRatings={...(rv.ratings||{})};
-editRubrics.forEach(rb=>{
-const container=document.getElementById("ae_stars_"+rv.id+"_"+rb.id);
-if(container){const sel=parseInt(container.getAttribute("data-selected"));if(sel)newRatings[rb.id]=sel;}
-});
-const avgVals=Object.values(newRatings).filter(v=>v>0);
-const overall=avgVals.length?Math.round(avgVals.reduce((a,b)=>a+b,0)/avgVals.length*10)/10:rv.overall;
-const revs=data.reviews.map(r=>r.id===rv.id?{...r,feedback:newFb,appreciation:newAp,ratings:newRatings,overall,editedBy:user.u,editedAt:new Date().toLocaleString()}:r);
-await saveKey("reviews",revs);
-setAdminEdit(null);
-showToast("Review fully updated! ✏️⭐");
-}} color="linear-gradient(135deg,#f59e0b,#d97706)" style={{fontSize:11}}>💾 Save All Changes</Btn>
-<Btn onClick={()=>setAdminEdit(null)} color="#999" style={{fontSize:11}}>Cancel</Btn>
-<Btn onClick={async()=>{if(!window.confirm("Delete this review?"))return;const revs=data.reviews.filter(r=>r.id!==rv.id);await saveKey("reviews",revs);setAdminEdit(null);showToast("Review deleted! 🗑️");}} color="#ef4444" style={{fontSize:11}}>🗑️ Delete</Btn>
-</div>
-</div>;
-})()}
-</div>;
-})}
-</Card>
-</div>);
+  const deleteReview = async (id) => {
+    // Delete is admin-only. Parents can no longer delete, even their own reviews.
+    if (!isAdminUser(user)) return;
+    if (!confirm("Delete this review?")) return;
+    await saveKey("reviews", reviews.filter(r => r.id !== id));
+    showToast("Deleted","ok");
+  };
+
+  return (
+    <Card title="📝 Submit a Review" bg="#ecfdf5" border="#6ee7b7">
+      {/* ---- FORM ---- */}
+      <div style={{background:"#fff",padding:14,borderRadius:10,marginBottom:20}}>
+        <label style={{fontWeight:700,fontSize:13}}>User</label>
+        <Sel value={form.kid} onChange={e=>setForm({...form,kid:e.target.value})}>
+          <option value="">-- Select user --</option>
+          {selectableKids.map(k => <option key={k} value={k}>{k}</option>)}
+        </Sel>
+
+        <label style={{fontWeight:700,fontSize:13}}>Week</label>
+        <Sel value={form.week} onChange={e=>setForm({...form,week:e.target.value})}>
+          <option value="">-- Select week --</option>
+          {agenda.map(w => (
+            <option key={w.week} value={w.week}>Week {w.week} — {w.title}</option>
+          ))}
+        </Sel>
+
+        <div style={{marginTop:16,fontWeight:700,fontSize:14,color:"#1b7a1b"}}>
+          🌟 Measures of Success
+        </div>
+
+        {MEASURES.map(m => (
+          <div key={m.id} style={{background:"#f0faf0",padding:12,borderRadius:10,marginTop:10,border:"1px solid #d1fae5"}}>
+            <div style={{fontWeight:700,fontSize:14}}>{m.label}</div>
+            <ul style={{margin:"4px 0 10px 20px",fontSize:12,color:"#555"}}>
+              {m.bullets.map(b => <li key={b}>{b}</li>)}
+            </ul>
+            <div style={{display:"flex",gap:16}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                <input type="radio" name={"m_"+m.id}
+                       checked={form.scores[m.id]===RATING.GOOD}
+                       onChange={()=>setScore(m.id,RATING.GOOD)} />
+                <span style={{color:"#1b7a1b",fontWeight:700}}>✅ Good</span>
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                <input type="radio" name={"m_"+m.id}
+                       checked={form.scores[m.id]===RATING.IMPROVE}
+                       onChange={()=>setScore(m.id,RATING.IMPROVE)} />
+                <span style={{color:"#b45309",fontWeight:700}}>🔧 Can Improve</span>
+              </label>
+            </div>
+          </div>
+        ))}
+
+        <div style={{marginTop:16,textAlign:"right"}}>
+          <Btn onClick={submit}>Submit Review</Btn>
+        </div>
+      </div>
+
+      {/* ---- MY REVIEWS (grouped by week, collapsible, sorted by kid) ---- */}
+      <div style={{fontWeight:700,fontSize:15,marginBottom:8}}>
+        {isAdminUser(user) ? "🛡 All Reviews" : "📚 My Submitted Reviews"}
+      </div>
+      {weekKeys.length === 0 && (
+        <p style={{color:"#666",textAlign:"center"}}>No reviews yet.</p>
+      )}
+      {weekKeys.map(w => {
+        const list = byWeek[w];
+        const isOpen = !!openWeeks[w];
+        return (
+          <div key={w} style={{background:"#fff",borderRadius:10,marginBottom:8,border:"1px solid #d1fae5"}}>
+            <div onClick={()=>toggleWeek(w)}
+                 style={{padding:12,cursor:"pointer",fontWeight:700,display:"flex",justifyContent:"space-between"}}>
+              <span>{isOpen?"▼":"▶"} Week {w}{getWeek(agenda,w)?" — "+getWeek(agenda,w).title:""}</span>
+              <span style={{color:"#888",fontWeight:400,fontSize:12}}>{list.length} review(s)</span>
+            </div>
+            {isOpen && (
+              <div style={{padding:"0 12px 12px"}}>
+                {list.map(rv => (
+                  <div key={rv.id} style={{background:"#f0faf0",padding:10,borderRadius:8,marginBottom:8}}>
+                    <div style={{fontWeight:700}}>{rv.kid}{rv.topicName ? " — " + rv.topicName : ""}</div>
+                    <div style={{fontSize:11,color:"#666",marginBottom:6}}>
+                      by {rv.byUser} · {rv.createdAt}
+                    </div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {MEASURES.map(m => {
+                        const v = rv.scores?.[m.id];
+                        const good = v === RATING.GOOD;
+                        return (
+                          <span key={m.id} style={{
+                            fontSize:11,padding:"3px 8px",borderRadius:12,
+                            background: good ? "#d1fae5" : "#fef3c7",
+                            color: good ? "#1b7a1b" : "#b45309",fontWeight:700
+                          }}>
+                            {m.label}: {good ? "Good" : "Improve"}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {isAdminUser(user) && (
+                      <div style={{marginTop:8,textAlign:"right"}}>
+                        <Btn color="#dc2626" onClick={()=>deleteReview(rv.id)}>Delete</Btn>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+// ===== TOPIC PICKER WITH INLINE ADMIN ADD =====
+// Shown inside ReviewsPage. When a week has no topics, admin gets
+// a one-click panel to add them from session item titles or free-type.
+function TopicPickerWithAdminAdd({ agenda, weekNum, topicId, onChange, onAgendaChange, isAdmin, showToast }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const weekObj = weekNum ? (agenda||[]).find(w => Number(w.week) === Number(weekNum)) : null;
+  const topics  = weekObj ? (weekObj.topics || []) : [];
+
+  // Suggested names from session items that have a title (not already added as topics)
+  const existingNames = topics.map(t => t.name.toLowerCase());
+  const suggestions = weekObj
+    ? (weekObj.items || [])
+        .filter(it => it.title && !existingNames.includes(it.title.toLowerCase()))
+        .map(it => it.title)
+    : [];
+
+  const addTopic = async (name) => {
+    if (!name.trim()) return;
+    if (!weekObj) return;
+    setSaving(true);
+    const tid = "t_" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+    const newTopic = { id: tid, name: name.trim() };
+    const newAgenda = (agenda||[]).map(w =>
+      Number(w.week) === Number(weekNum)
+        ? { ...w, topics: [...(w.topics||[]), newTopic] }
+        : w
+    );
+    await onAgendaChange(newAgenda);
+    onChange(tid); // auto-select the newly created topic
+    setNewName("");
+    setSaving(false);
+    if (showToast) showToast("Topic added ✅","ok");
+  };
+
+  if (!weekNum) {
+    return (
+      <Sel disabled style={{marginBottom:8}}>
+        <option>(pick a week first)</option>
+      </Sel>
+    );
+  }
+
+  return (
+    <div style={{marginBottom:8}}>
+      {topics.length > 0 ? (
+        <Sel value={topicId} onChange={e=>onChange(e.target.value)}>
+          <option value="">-- Select topic --</option>
+          {topics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </Sel>
+      ) : (
+        <div style={{background:"#fffbeb",border:"2px dashed #fbbf24",borderRadius:10,
+                     padding:"12px 14px",marginBottom:8}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#d97706",marginBottom:4}}>
+            🎤 No speech topics for this week yet
+          </div>
+          {isAdmin ? (
+            <>
+              <div style={{fontSize:12,color:"#92400e",marginBottom:8}}>
+                Add topics below — they'll appear here and in the Agenda page.
+              </div>
+              {suggestions.length > 0 && (
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#78350f",marginBottom:4}}>
+                    Quick-add from this week's session items:
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {suggestions.map((s,i) => (
+                      <button key={i} onClick={()=>addTopic(s)} disabled={saving}
+                              style={{padding:"5px 12px",borderRadius:20,border:"1px solid #fbbf24",
+                                     background:"#fef3c7",color:"#92400e",fontSize:12,fontWeight:700,
+                                     cursor:"pointer",fontFamily:"inherit"}}>
+                        + {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={{display:"flex",gap:6,marginTop:4}}>
+                <Inp placeholder="Or type a custom topic name..." value={newName}
+                     onChange={e=>setNewName(e.target.value)}
+                     onKeyDown={e=>e.key==="Enter"&&addTopic(newName)}
+                     style={{flex:1,marginBottom:0}}/>
+                <Btn onClick={()=>addTopic(newName)} disabled={saving||!newName.trim()}>
+                  {saving?"...":"Add"}
+                </Btn>
+              </div>
+            </>
+          ) : (
+            <div style={{fontSize:12,color:"#92400e"}}>
+              The admin hasn't added speech topics for this week yet. Please ask them to add topics on the Agenda page.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Even when topics exist, admin can add more inline */}
+      {isAdmin && topics.length > 0 && (
+        <div>
+          {!showAdd ? (
+            <button onClick={()=>setShowAdd(true)}
+                    style={{fontSize:11,color:"#3da33d",background:"none",border:"none",
+                           cursor:"pointer",fontFamily:"inherit",padding:"2px 0",fontWeight:700}}>
+              + Add another topic to this week
+            </button>
+          ) : (
+            <div style={{display:"flex",gap:6,marginTop:4}}>
+              <Inp placeholder="New topic name..." value={newName}
+                   onChange={e=>setNewName(e.target.value)}
+                   onKeyDown={e=>{if(e.key==="Enter"){addTopic(newName);setShowAdd(false);}}}
+                   style={{flex:1,marginBottom:0}}/>
+              <Btn onClick={()=>{addTopic(newName);setShowAdd(false);}}
+                   disabled={saving||!newName.trim()}>Add</Btn>
+              <Btn color="#999" onClick={()=>{setShowAdd(false);setNewName("");}}>✕</Btn>
+            </div>
+          )}
+          {suggestions.length > 0 && showAdd && (
+            <div style={{marginTop:6,display:"flex",flexWrap:"wrap",gap:5}}>
+              {suggestions.map((s,i)=>(
+                <button key={i} onClick={()=>{addTopic(s);setShowAdd(false);}}
+                        style={{padding:"3px 10px",borderRadius:16,border:"1px solid #d1fae5",
+                               background:"#f0faf0",color:"#1b7a1b",fontSize:11,fontWeight:700,
+                               cursor:"pointer",fontFamily:"inherit"}}>
+                  + {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===== REVIEWS PAGE =====
+// Hard role gate — kids must never reach the submission UI even via deep link.
+function HowDidIDoPage({ data, user, saveKey, showToast }) {
+  const allReviews = data.reviews || [];
+  const members = data.members || [];
+  const agenda  = sortedAgenda(data.agenda || []);
+
+  // Show ONLY reviews submitted FOR the logged-in user (Admin/Parent/Kid all behave the same:
+  // each sees reviews where they are the reviewee). Match primarily by kidU (username) so that
+  // renaming a display name does not break old reviews; fall back to display-name match for
+  // legacy records that were saved before kidU existed.
+  const loggedInName = user.display || user.u;
+  const allowedKids = [loggedInName];
+
+  // Filter once up-front by reviewee identity, then build the tree.
+  // We also normalize r.kid to the CURRENT display name so the tree bucket aligns
+  // even if the display name was changed after the review was submitted.
+  const reviews = allReviews
+    .filter(r => {
+      if (!r || !r.scores) return false;
+      if (r.kidU) return r.kidU === user.u;        // preferred: username match
+      return r.kid === loggedInName;               // legacy fallback: display-name match
+    })
+    .map(r => ({ ...r, kid: loggedInName }));
+
+  // Build tree[kid][week][topicId] = { topicName, items: [...] } inline.
+  // We intentionally do NOT call groupReviews() here: it requires r.topicId, but
+  // the current review model stores one review per (user + week) with no topic,
+  // so groupReviews would silently drop every record. Reviews without a topic
+  // are bucketed under a synthetic "_week" slot so the existing render loop works.
+  const tree = {};
+  reviews.forEach(r => {
+    const kid = r.kid;
+    const wk  = Number(r.week) || 0;
+    const tp  = r.topicId || "_week";
+    tree[kid]         = tree[kid]         || {};
+    tree[kid][wk]     = tree[kid][wk]     || {};
+    tree[kid][wk][tp] = tree[kid][wk][tp] || { topicName: r.topicName || "Week summary", items: [] };
+    tree[kid][wk][tp].items.push(r);
+    if (!tree[kid][wk][tp].topicName && r.topicName) tree[kid][wk][tp].topicName = r.topicName;
+  });
+
+  // Sort kids alphabetically, restricted by allowedKids
+  const kidNames = Object.keys(tree)
+    .filter(k => allowedKids.includes(k))
+    .sort((a,b) => a.localeCompare(b));
+
+  const [openKid, setOpenKid]     = useState({});
+  const [openWeek, setOpenWeek]   = useState({}); // key: kid+"|"+week
+  const [openTopic, setOpenTopic] = useState({}); // key: kid+"|"+week+"|"+topicId
+
+  const tKid   = (k)       => setOpenKid(s => ({...s, [k]: !s[k]}));
+  const tWeek  = (k,w)     => setOpenWeek(s => ({...s, [k+"|"+w]: !s[k+"|"+w]}));
+  const tTopic = (k,w,t)   => setOpenTopic(s => ({...s, [k+"|"+w+"|"+t]: !s[k+"|"+w+"|"+t]}));
+
+  const isAdm = isAdminUser(user);
+
+  // Admin action: clear all reviews for a slot (kid+week+topic)
+  const clearSlot = async (kid, week, topicId) => {
+    if (!isAdm) return;
+    if (!confirm("Delete ALL reviews for "+kid+" · Week "+week+" · this topic?")) return;
+    // Operate on the FULL review list, not the locally-filtered one, or we'd
+    // wipe every other user's reviews on save. Match the synthetic "_week"
+    // bucket by treating any empty/missing topicId as equivalent.
+    const isWeekBucket = !topicId || topicId === "_week";
+    const next = allReviews.filter(r => {
+      if (!r) return true;
+      const sameKid = r.kidU ? (r.kidU === user.u) : (r.kid === kid);
+      const sameWeek = Number(r.week) === Number(week);
+      const sameTopic = isWeekBucket ? !r.topicId : (r.topicId === topicId);
+      return !(sameKid && sameWeek && sameTopic);
+    });
+    await saveKey("reviews", next);
+    showToast("Aggregated entry cleared","ok");
+  };
+
+  // Auto-open the single kid (e.g. when a kid logs in and views their own results)
+  useEffect(() => {
+    if (kidNames.length === 1 && !openKid[kidNames[0]]) {
+      setOpenKid({ [kidNames[0]]: true });
+    }
+  }, [kidNames.join("|")]); // eslint-disable-line
+
+  return (
+    <Card title="🎯 How Did I Do" bg="#eff6ff" border="#93c5fd">
+      <p style={{fontSize:13,color:"#555",marginTop:0}}>
+        Final results are based on everyone's reviews, using majority opinion. If there's a tie, it is marked as <b>"Good"</b>. 🎉
+      </p>
+
+      {kidNames.length === 0 && allowedKids.length > 0 && (
+        <div style={{textAlign:"center",padding:"28px 16px",background:"#fff",borderRadius:10,
+                     border:"1px solid #bfdbfe"}}>
+          <div style={{fontSize:36,marginBottom:8}}>🌱</div>
+          <div style={{fontWeight:700,fontSize:15,color:"#1e40af",marginBottom:4}}>No results yet!</div>
+          <div style={{fontSize:13,color:"#666"}}>
+            Once parents submit reviews, your results will appear here.
+          </div>
+        </div>
+      )}
+
+      {allowedKids.length === 0 && (
+        <div style={{textAlign:"center",padding:"28px 16px",background:"#fff",borderRadius:10}}>
+          <div style={{fontSize:13,color:"#888"}}>No kids linked to your account.</div>
+        </div>
+      )}
+
+      {kidNames.map(kid => {
+        const weeks = Object.keys(tree[kid]).map(Number).sort((a,b)=>a-b);
+        const kidOpen = !!openKid[kid];
+        return (
+          <div key={kid} style={{background:"#fff",borderRadius:10,marginBottom:10,border:"1px solid #bfdbfe"}}>
+            <div onClick={()=>tKid(kid)}
+                 style={{padding:12,cursor:"pointer",fontWeight:700,fontSize:15,display:"flex",justifyContent:"space-between"}}>
+              <span>{kidOpen?"▼":"▶"} 🧑 {kid}</span>
+              <span style={{fontSize:11,color:"#666",fontWeight:400}}>{weeks.length} week(s)</span>
+            </div>
+
+            {kidOpen && weeks.map(wk => {
+              const topicIds = Object.keys(tree[kid][wk]);
+              // Sort topics by their display name for stability
+              topicIds.sort((a,b) =>
+                (tree[kid][wk][a].topicName||"").localeCompare(tree[kid][wk][b].topicName||"")
+              );
+              const weekKey = kid+"|"+wk;
+              const wkOpen = !!openWeek[weekKey];
+              const weekTitle = (getWeek(agenda, wk)?.title) || ("Week "+wk);
+              return (
+                <div key={wk} style={{margin:"0 12px 10px",background:"#f0f7ff",borderRadius:8,border:"1px solid #dbeafe"}}>
+                  <div onClick={()=>tWeek(kid,wk)}
+                       style={{padding:10,cursor:"pointer",fontWeight:700,fontSize:13,display:"flex",justifyContent:"space-between"}}>
+                    <span>{wkOpen?"▼":"▶"} 📅 Week {wk} — {weekTitle}</span>
+                    <span style={{fontSize:11,color:"#666",fontWeight:400}}>{topicIds.length} topic(s)</span>
+                  </div>
+
+                  {wkOpen && topicIds.map(tp => {
+                    const slot = tree[kid][wk][tp];
+                    const tpKey = kid+"|"+wk+"|"+tp;
+                    const tpOpen = !!openTopic[tpKey];
+                    const rows = aggregatedMeasuresFor(slot.items);
+                    return (
+                      <div key={tp} style={{margin:"0 10px 10px",background:"#fff",borderRadius:8,border:"1px solid #bfdbfe"}}>
+                        <div onClick={()=>tTopic(kid,wk,tp)}
+                             style={{padding:10,cursor:"pointer",fontWeight:700,fontSize:13,display:"flex",justifyContent:"space-between"}}>
+                          <span>{tpOpen?"▼":"▶"} 🎤 {slot.topicName || "(untitled topic)"}</span>
+                          <span style={{fontSize:10,color:"#888",fontWeight:400}}>
+                            based on {slot.items.length} review(s)
+                          </span>
+                        </div>
+                        {tpOpen && (
+                          <div style={{padding:"0 10px 10px"}}>
+                            {rows.map(r => {
+                              if (!r.result) return null;
+                              const good = r.result === RATING.GOOD;
+                              return (
+                                <div key={r.id} style={{
+                                  display:"flex",justifyContent:"space-between",
+                                  padding:"6px 10px",marginBottom:4,borderRadius:6,
+                                  background: good ? "#d1fae5" : "#fef3c7"
+                                }}>
+                                  <span style={{fontWeight:700,fontSize:13}}>{r.label}</span>
+                                  <span style={{
+                                    fontWeight:700,fontSize:12,
+                                    color: good ? "#1b7a1b" : "#b45309"
+                                  }}>
+                                    {good ? "✅ Good" : "🔧 Can Improve"}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {isAdm && (
+                              <div style={{textAlign:"right",marginTop:6}}>
+                                <Btn color="#dc2626" onClick={()=>clearSlot(kid,wk,tp)}>
+                                  🛡 Clear slot
+                                </Btn>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+// ==== Because the chart SVG block is ~150 lines, the cleanest approach is to extract the chart into a helper component called GrowthChart. 
+// ==== Here's the component to add before GrowthDashboardPage
+function GrowthChart({ kidName, allSeries, allWeeks, activeMeasures, COLORS, agenda, isAdm, members }) {
+  // (copy the entire SVG + table block from inside the existing Card, replacing
+  //  `selectedKids` with `[kidName]` and `allSeries[kid]` with `allSeries[kidName]`)
+  const { weeks: kidWeeks, series } = allSeries[kidName] || { weeks: [], series: {} };
+  // ... rest of chart code scoped to single kid ...
+}
+
+// ===== GROWTH DASHBOARD PAGE =====
+function GrowthDashboardPage({ data, user }) {
+  const reviews  = data.reviews  || [];
+  const members  = data.members  || [];
+  const agenda   = data.agenda   || [];
+  const isAdm    = isAdminUser(user);
+
+  const COLORS = {
+    confidence:   "#1b7a1b",
+    clarity:      "#2563eb",
+    organization: "#d97706",
+    engagement:   "#9333ea",
+    fluency:      "#db2777",
+  };
+
+  // Kid selection:
+  //   - Admin  → all members
+  //   - Parent → all members (admin-style view, but without numeric scores)
+  //   - Kid    → only themselves (their own display name)
+  const isKid = isKidUser(user);
+  const allKids = isKid
+    ? members.filter(m => m.name === (user.display || user.u)).map(m => m.name)
+    : members.map(m => m.name);
+  
+  const sortedKids = [...allKids].sort((a,b) => a.localeCompare(b));
+
+  // Admin: multi-select; others: auto-select their kid(s)
+  const [selectedKids, setSelectedKids] = useState([]);
+
+  useEffect(() => {
+    if (sortedKids.length === 0) return;
+    if (isKid) {
+      // Kid: auto-select themselves, single entry
+      setSelectedKids(sortedKids);
+    } else if (selectedKids.length === 0) {
+      // Admin & Parent: default to first kid, multi-select available
+      setSelectedKids([sortedKids[0]]);
+    }
+  }, [sortedKids.join("|")]); // eslint-disable-line
+
+  const toggleKid = (kid) => {
+    setSelectedKids(prev => {
+      const isSelected = prev.includes(kid);
+      if (isSelected && prev.length === 1) return prev; // keep at least one
+      return isSelected ? prev.filter(k => k !== kid) : [...prev, kid];
+    });
+  };
+
+  // ── Measure selection ──
+  const [selectedMeasures, setSelectedMeasures] = useState(MEASURES.map(m => m.id));
+  const [measuresInfoOpen, setMeasuresInfoOpen] = useState(false);
+  const toggleMeasure = (id) => {
+    setSelectedMeasures(prev => {
+      const isSelected = prev.includes(id);
+      if (isSelected && prev.length === 1) return prev; // keep at least one
+      return isSelected ? prev.filter(m => m !== id) : [...prev, id];
+    });
+  };
+  const activeMeasures = MEASURES.filter(m => selectedMeasures.includes(m.id));
+
+  // ── Chart data: one series per selected kid+measure ──
+  // We overlay multiple kids on the same chart axes
+  const allSeries = {}; // kid -> { weeks, series }
+  selectedKids.forEach(kid => {
+    allSeries[kid] = buildGrowthSeries(reviews, kid);
+  });
+
+  // Unified week axis = union of all weeks across selected kids, sorted
+  const allWeeksSet = new Set();
+  Object.values(allSeries).forEach(({ weeks }) => weeks.forEach(w => allWeeksSet.add(w)));
+  const allWeeks = [...allWeeksSet].sort((a,b) => a - b);
+
+  const hasData = allWeeks.length > 0;
+
+  // Chart geometry
+  const W = 680, H = 380, padL = 50, padR = 20, padT = 24, padB = 78;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  // Y range across all selected kids + measures
+  let allVals = [];
+  Object.values(allSeries).forEach(({ series }) => {
+    activeMeasures.forEach(m => { allVals = allVals.concat(series[m.id] || []); });
+  });
+  if (!allVals.length) allVals = [0];
+  let yMin = Math.min(0, ...allVals);
+  let yMax = Math.max(0, ...allVals);
+  if (yMin === yMax) { yMin -= 5; yMax += 5; }
+  const yPad = (yMax - yMin) * 0.12;
+  yMin -= yPad; yMax += yPad;
+
+  const xFor = i => allWeeks.length === 1
+    ? padL + innerW / 2
+    : padL + (i / (allWeeks.length - 1)) * innerW;
+
+  const yFor = v => padT + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+
+  // Y-axis ticks
+  const yTicks = (() => {
+    const ticks = new Set([0]);
+    const range = yMax - yMin;
+    const step = Math.ceil(range / 5 / 5) * 5 || 5;
+    for (let v = Math.ceil(yMin / step) * step; v <= yMax + 0.01; v += step) ticks.add(Math.round(v));
+    return [...ticks].filter(v => v >= yMin - 1 && v <= yMax + 1).sort((a,b) => a - b);
+  })();
+
+  // Line style: if multiple kids, use dashed lines for 2nd+ kid
+  const kidDash = (kidIdx) => kidIdx === 0 ? "none" : kidIdx === 1 ? "8 4" : "4 4";
+
+  return (
+    <div style={{animation:"fadeIn .4s"}}>
+      <h1 style={{fontWeight:900,fontSize:26,color:"#1b7a1b",marginBottom:4}}>📈 My Growth</h1>
+      <p style={{fontSize:13,color:"#6b7280",marginBottom:14}}>
+        {isAdm ? "Cumulative measure scores. Select kids & measures to compare." : "Your progress across each measure of success, week by week. Keep going! 🌱"}
+      </p>
+
+      {/* ── Kid selector (admin + parent: multi-toggle; kid: hidden) ── */}
+      {!isKid && sortedKids.length > 0 && (
+        <div style={{marginBottom:14,background:"#f8f4ff",border:"1px solid #e9d5ff",borderRadius:10,padding:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+		  <div style={{fontWeight:700,fontSize:13,color:"#7c3aed"}}>
+			👤 Kids — click to select, double-click to deselect
+		  </div>
+		  <button
+			onClick={() => setSelectedKids(selectedKids.length === sortedKids.length ? [sortedKids[0]] : [...sortedKids])}
+			style={{fontSize:11,padding:"4px 10px",borderRadius:12,border:"1.5px solid #7c3aed",
+					background:"#ede9fe",color:"#5b21b6",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>
+			{selectedKids.length === sortedKids.length ? "Deselect All" : "Select All"}
+		  </button>
+			</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+            {sortedKids.map((kid, ki) => {
+              const m = members.find(x => x.name === kid);
+              const sel = selectedKids.includes(kid);
+              return (
+                <button key={kid}
+                  onClick={() => toggleKid(kid)}
+                  onDoubleClick={() => setSelectedKids(prev => prev.filter(k => k !== kid))}
+                  style={{padding:"7px 14px",borderRadius:20,border:"2px solid",
+                         borderColor: sel ? "#7c3aed" : "#d1d5db",
+                         background: sel ? "#ede9fe" : "#fff",
+                         color: sel ? "#5b21b6" : "#6b7280",
+                         fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",
+                         display:"flex",alignItems:"center",gap:6,transition:".15s"}}>
+                  {m?.emoji || "🧒"} {kid}
+                  {sel && <span style={{fontSize:9,background:"#7c3aed",color:"#fff",
+                                        borderRadius:"50%",width:14,height:14,
+                                        display:"inline-flex",alignItems:"center",justifyContent:"center"}}>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{fontSize:10,color:"#9ca3af",marginTop:6}}>
+            Single-click toggles; double-click removes. At least one must remain selected.
+          </div>
+        </div>
+      )}
+
+	{/* ── Measures of Success reference (collapsed by default) ── */}
+	<div style={{marginBottom:14,background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:10,overflow:"hidden"}}>
+	  <div onClick={() => setMeasuresInfoOpen(o => !o)}
+		   style={{padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",
+				   alignItems:"center",fontWeight:700,fontSize:13,color:"#92400e"}}>
+		<span>📋 Measures of Success — click to {measuresInfoOpen ? "collapse" : "expand"}</span>
+		<span style={{fontSize:16}}>{measuresInfoOpen ? "▲" : "▼"}</span>
+	  </div>
+	  {measuresInfoOpen && (
+		<div style={{padding:"0 14px 14px",display:"flex",flexWrap:"wrap",gap:10}}>
+		  {MEASURES.map(m => (
+			<div key={m.id} style={{background:"#fff",border:"1px solid #fde68a",borderRadius:8,padding:"8px 12px",minWidth:160,flex:"1 1 160px"}}>
+			  <div style={{fontWeight:800,fontSize:13,color:"#92400e",marginBottom:4}}>{m.label}</div>
+			  <ul style={{margin:0,paddingLeft:16,fontSize:11,color:"#555"}}>
+				{m.bullets.map(b => <li key={b}>{b}</li>)}
+			  </ul>
+			</div>
+		  ))}
+		</div>
+	  )}
+	</div>
+
+      {/* ── Measure selector ── */}
+      <div style={{marginBottom:14,background:"#f0faf0",border:"1px solid #d1fae5",borderRadius:10,padding:12}}>
+		<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+		  <div style={{fontWeight:700,fontSize:13,color:"#1b7a1b"}}>
+			🌟 Measures of Success — click to toggle
+		  </div>
+		  <button
+			onClick={() => setSelectedMeasures(
+			  selectedMeasures.length === MEASURES.length ? [MEASURES[0].id] : MEASURES.map(m => m.id)
+			)}
+			style={{fontSize:11,padding:"4px 10px",borderRadius:12,border:"1.5px solid #1b7a1b",
+					background:"#d1fae5",color:"#1b7a1b",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>
+			{selectedMeasures.length === MEASURES.length ? "Deselect All" : "Select All"}
+		  </button>
+		</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+          {MEASURES.map(m => {
+            const sel = selectedMeasures.includes(m.id);
+            return (
+              <button key={m.id}
+                onClick={() => toggleMeasure(m.id)}
+                style={{padding:"6px 14px",borderRadius:20,border:"2px solid",
+                       borderColor: sel ? COLORS[m.id] : "#d1d5db",
+                       background: sel ? COLORS[m.id]+"18" : "#fff",
+                       color: sel ? COLORS[m.id] : "#9ca3af",
+                       fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+                       display:"flex",alignItems:"center",gap:6,transition:".15s"}}>
+                <span style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
+                              background: sel ? COLORS[m.id] : "#d1d5db",
+                              border:"2px solid "+(sel ? COLORS[m.id] : "#d1d5db")}}/>
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── No data ── */}
+      {!hasData && (
+        <Card bg="#f8f4ff" border="#e9d5ff">
+          <div style={{textAlign:"center",padding:"28px 16px"}}>
+            <div style={{fontSize:48,marginBottom:10}}>🌱</div>
+            <div style={{fontWeight:800,fontSize:16,color:"#7c3aed",marginBottom:6}}>No review data yet</div>
+            <div style={{fontSize:13,color:"#888",lineHeight:1.6}}>
+              Growth trends appear here once parents submit reviews.
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Chart ── */}
+	  {/* ── Per-kid separate charts ── */}
+      {hasData && selectedKids.map(kid => {
+        const { weeks: kidWeeks, series } = allSeries[kid] || { weeks:[], series:{} };
+
+        // Recompute geometry scoped to this one kid's data
+        let kidVals = [];
+        activeMeasures.forEach(m => { kidVals = kidVals.concat(series[m.id] || []); });
+        if (!kidVals.length) kidVals = [0];
+        let kyMin = Math.min(0, ...kidVals);
+        let kyMax = Math.max(0, ...kidVals);
+        if (kyMin === kyMax) { kyMin -= 5; kyMax += 5; }
+        const kyPad = (kyMax - kyMin) * 0.12;
+        kyMin -= kyPad; kyMax += kyPad;
+
+        const kyFor = v => padT + innerH - ((v - kyMin) / (kyMax - kyMin)) * innerH;
+
+        const kyTicks = (() => {
+          const ticks = new Set([0]);
+          const range = kyMax - kyMin;
+          const step = Math.ceil(range / 5 / 5) * 5 || 5;
+          for (let v = Math.ceil(kyMin / step) * step; v <= kyMax + 0.01; v += step) ticks.add(Math.round(v));
+          return [...ticks].filter(v => v >= kyMin - 1 && v <= kyMax + 1).sort((a,b) => a - b);
+        })();
+
+        const kxFor = i => allWeeks.length === 1
+          ? padL + innerW / 2
+          : padL + (i / (allWeeks.length - 1)) * innerW;
+
+        const mem = members.find(m => m.name === kid);
+        const kidRevs = reviews.filter(r => r && r.kid === kid && r.scores);
+        const byWeekKid = {};
+        kidRevs.forEach(r => {
+          const w = Number(r.week) || 0;
+          (byWeekKid[w] = byWeekKid[w] || []).push(r);
+        });
+
+        return (
+          <Card key={kid} bg="#fff" border="#e9d5ff" style={{marginBottom:16}}>
+            {/* Kid header */}
+            <div style={{fontWeight:800,fontSize:15,color:"#374151",marginBottom:12,
+                         display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:22}}>{mem?.emoji || "🧒"}</span>
+              <span>{kid}</span>
+            </div>
+
+            {/* Legend */}
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,justifyContent:"center"}}>
+              {activeMeasures.map(m => (
+                <div key={m.id} style={{display:"flex",alignItems:"center",gap:6,
+                                        padding:"4px 12px",borderRadius:20,
+                                        background:COLORS[m.id]+"15",
+                                        border:"1.5px solid "+COLORS[m.id]}}>
+                  <span style={{width:20,height:2.5,background:COLORS[m.id],display:"inline-block",borderRadius:2}}/>
+                  <span style={{fontWeight:700,fontSize:12,color:COLORS[m.id]}}>{m.label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* SVG chart */}
+            <div style={{overflowX:"auto"}}>
+              <svg viewBox={`0 0 ${W} ${H}`} width="100%"
+                   style={{maxWidth:W,display:"block",minWidth:340}}>
+
+                {/* Grid + Y ticks */}
+                {kyTicks.map(v => (
+                  <g key={v}>
+                    <line x1={padL} x2={W-padR} y1={kyFor(v)} y2={kyFor(v)}
+                          stroke={v===0?"#9ca3af":"#f0f0f0"}
+                          strokeWidth={v===0?1.5:1}
+                          strokeDasharray={v===0?"none":"3 3"}/>
+                    <text x={padL-5} y={kyFor(v)+4} fontSize="9" textAnchor="end" fill="#9ca3af">{v}</text>
+                  </g>
+                ))}
+
+                {/* Axes */}
+                <line x1={padL} y1={padT} x2={padL} y2={H-padB} stroke="#d1d5db" strokeWidth="1.5"/>
+                <line x1={padL} y1={H-padB} x2={W-padR} y2={H-padB} stroke="#d1d5db" strokeWidth="1.5"/>
+
+                {/* Y-axis label */}
+                <text x={13} y={padT+innerH/2} fontSize="10" textAnchor="middle" fill="#9ca3af"
+                      fontWeight="600" transform={`rotate(-90 13 ${padT+innerH/2})`}>
+                  {isAdm ? "Cumulative Score" : "Growth ↑"}
+                </text>
+
+                {/* X labels */}
+                {allWeeks.map((w, i) => {
+                  const wObj = getWeek(agenda, w);
+                  const cleanTitle = wObj
+                    ? wObj.title.replace(/^[\u{1F300}-\u{1FFFF}\u{2600}-\u{27BF}\s]*/u,"")
+                                 .replace(/^Week-?\s*\d+\s*[:\-–]\s*/i,"")
+                                 .trim()
+                    : "";
+                  // Wrap to up to 2 lines of ~14 chars each, breaking on whitespace.
+                  const wrap = (str, max) => {
+                    if (!str) return [];
+                    const words = str.split(/\s+/);
+                    const lines = [];
+                    let cur = "";
+                    for (const wd of words) {
+                      if ((cur + " " + wd).trim().length <= max) {
+                        cur = (cur + " " + wd).trim();
+                      } else {
+                        if (cur) lines.push(cur);
+                        cur = wd;
+                        if (lines.length === 1) break; // we'll put the rest on line 2
+                      }
+                    }
+                    if (cur) lines.push(cur);
+                    if (lines.length > 2) {
+                      const tail = lines.slice(1).join(" ");
+                      lines.length = 2;
+                      lines[1] = tail.length > max ? tail.slice(0, max - 1) + "…" : tail;
+                    }
+                    return lines;
+                  };
+                  const titleLines = wrap(cleanTitle, 14);
+                  return (
+                    <g key={w}>
+                      <text x={kxFor(i)} y={H-padB+16} fontSize="11"
+                            textAnchor="middle" fill="#374151" fontWeight="700">W{w}</text>
+                      {titleLines.map((ln, li) => (
+                        <text key={li} x={kxFor(i)} y={H-padB+28+li*11} fontSize="9"
+                              textAnchor="middle" fill="#6b7280">{ln}</text>
+                      ))}
+                    </g>
+                  );
+                })}
+
+                {/* Lines */}
+                {activeMeasures.map(m => {
+                  const pts = allWeeks.map((w, i) => {
+                    const wIdx = kidWeeks.indexOf(w);
+                    if (wIdx === -1) return null;
+                    return { x: kxFor(i), y: kyFor(series[m.id]?.[wIdx] ?? 0) };
+                  }).filter(Boolean);
+                  if (pts.length < 1) return null;
+                  const d = "M" + pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L");
+                  return (
+                    <path key={m.id} d={d} fill="none"
+                          stroke={COLORS[m.id]} strokeWidth="2.5"
+                          strokeLinejoin="round" strokeLinecap="round" opacity="0.9"/>
+                  );
+                })}
+
+                {/* Dots */}
+                {activeMeasures.map(m =>
+                  allWeeks.map((w, i) => {
+                    const wIdx = kidWeeks.indexOf(w);
+                    if (wIdx === -1) return null;
+                    const val = series[m.id]?.[wIdx];
+                    if (val === undefined) return null;
+                    return (
+                      <circle key={m.id+i}
+                              cx={kxFor(i)} cy={kyFor(val)} r="4.5"
+                              fill="#fff" stroke={COLORS[m.id]} strokeWidth="2.5"/>
+                    );
+                  })
+                )}
+
+                {/* Score labels displayed for just admin, neither parent nor kid) */}
+                {isAdm && activeMeasures.map(m =>
+                  allWeeks.map((w, i) => {
+                    const wIdx = kidWeeks.indexOf(w);
+                    if (wIdx === -1) return null;
+                    const val = series[m.id]?.[wIdx];
+                    if (val === undefined) return null;
+                    return (
+                      <text key={"lbl"+m.id+i}
+                            x={kxFor(i)} y={kyFor(val)-12}
+                            fontSize="10" textAnchor="middle"
+                            fill={COLORS[m.id]} fontWeight="700"
+                            stroke="#fff" strokeWidth="3"
+                            paintOrder="stroke">{val}</text>
+                    );
+                  })
+                )}
+              </svg>
+            </div>
+
+            {/* Week-by-week score table */}
+            <div style={{marginTop:18,overflowX:"auto"}}>
+              <div style={{fontWeight:700,fontSize:13,color:"#1b7a1b",marginBottom:8}}>
+                📊 Week-by-week scores
+              </div>
+              <table style={{borderCollapse:"collapse",fontSize:12,width:"100%",minWidth:300}}>
+                <thead>
+                  <tr style={{background:"#f0faf0"}}>
+                    <th style={{padding:"6px 10px",textAlign:"left",borderBottom:"2px solid #d1fae5",
+                                fontWeight:800,color:"#1b7a1b",whiteSpace:"nowrap"}}>Measure</th>
+                    {allWeeks.map(w => (
+                      <th key={w} style={{padding:"6px 10px",textAlign:"center",
+                                          borderBottom:"2px solid #d1fae5",
+                                          fontWeight:800,color:"#1b7a1b",whiteSpace:"nowrap"}}>
+                        W{w}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeMeasures.map((m, mi) => (
+                    <tr key={m.id} style={{background: mi%2===0?"#fff":"#f8fff8"}}>
+                      <td style={{padding:"6px 10px",fontWeight:700,
+                                  color:COLORS[m.id],borderBottom:"1px solid #f0f0f0",
+                                  whiteSpace:"nowrap"}}>
+                        <span style={{width:8,height:8,borderRadius:"50%",
+                                      background:COLORS[m.id],display:"inline-block",
+                                      marginRight:6}}/>
+                        {m.label}
+                      </td>
+                      {allWeeks.map(w => {
+                        const wIdx = kidWeeks.indexOf(w);
+                        const cumScore = wIdx !== -1 ? (series[m.id]?.[wIdx] ?? null) : null;
+                        const verdict = aggregateMeasure(byWeekKid[w] || [], m.id);
+                        return (
+                          <td key={w} style={{padding:"6px 10px",textAlign:"center",
+                                              borderBottom:"1px solid #f0f0f0"}}>
+                            {verdict === RATING.GOOD ? (
+                              <span title="Good">
+                                <span style={{color:"#1b7a1b",fontWeight:700,fontSize:12}}>✅</span>
+                                {isAdm && cumScore !== null &&
+                                  <span style={{fontSize:10,color:"#1b7a1b",marginLeft:2}}>({cumScore})</span>}
+                              </span>
+                            ) : verdict === RATING.IMPROVE ? (
+                              <span title="Can Improve">
+                                <span style={{color:"#b45309",fontWeight:700,fontSize:12}}>🔧</span>
+                                {isAdm && cumScore !== null &&
+                                  <span style={{fontSize:10,color:"#b45309",marginLeft:2}}>({cumScore})</span>}
+                              </span>
+                            ) : (
+                              <span style={{color:"#d1d5db",fontSize:11}}>—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>
+                ✅ Good &nbsp;·&nbsp; 🔧 Can Improve &nbsp;·&nbsp; — No data
+                {isAdm && <span> &nbsp;·&nbsp; (n) = cumulative score</span>}
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
 }
 
 // ===== WALL OF FAME PAGE =====
@@ -1229,28 +2385,323 @@ return <div>
 }
 
 // ===== AGENDA =====
-function AgendaPage({data, saveKey, user, showToast}) {
-const [expanded, setExpanded] = React.useState({});
-const toggle = (i) => setExpanded(prev => ({...prev, [i]: !prev[i]}));
+// ===== AGENDA =====
+function AgendaPage({ data, saveKey, user, showToast }) {
+  const canEdit = ACCESS.canEditAgenda(user);
+  const [openWeek, setOpenWeek] = useState(null);
+  const [newWeekNum, setNewWeekNum] = useState("");
+  const [newWeekTitle, setNewWeekTitle] = useState("");
+  // editing state per-week (inline)
+  const [editingWeek, setEditingWeek] = useState(null); // weekNum being edited
+  const [weekDraft, setWeekDraft] = useState({}); // draft fields for that week
 
-return (<div style={{animation:"fadeIn .4s"}}><h1 style={{fontWeight:900,fontSize:26,color:"#1b7a1b",marginBottom:16}}>📋 Agenda — Fun is in!! 🎉</h1>
-{data.agenda.map((w,i) => {
-const isOpen = !!expanded[i];
-return (<Card key={i} title={
-<div onClick={() => toggle(i)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",width:"100%"}}>
-<span>{w.title}</span>
-<span style={{fontSize:14,color:"#1b7a1b",marginLeft:10,transition:"transform .2s",transform:isOpen?"rotate(180deg)":"rotate(0deg)"}}>▼</span>
-</div>
-}>
-{isOpen && <div style={{animation:"fadeIn .3s"}}>
-<p style={{color:"#6b7280",marginBottom:10,fontSize:13}}>🎯 Goal: {w.goal}</p>
-{w.items.map((item,j) => <div key={j} style={{padding:"6px 0",borderBottom:"1px solid #f3f3f3",display:"flex",gap:10,alignItems:"flex-start"}}><span style={{background:"#e9f7e9",color:"#1b7a1b",padding:"3px 8px",borderRadius:7,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{item.time}</span><span style={{fontSize:13}}>{item.text}</span></div>)}
-{w.challenge && <div style={{marginTop:10,background:"#e9f7e9",padding:10,borderRadius:9,fontSize:13}}><strong>🎮 Challenge:</strong> {w.challenge}</div>}
-{w.sneak_peek && <div style={{marginTop:6,background:"#fef3c7",padding:10,borderRadius:9,fontSize:13}}><strong>🔮 Sneak Peek:</strong> {w.sneak_peek}</div>}
-</div>}
-</Card>);
-})}
-</div>);
+  const agenda = sortedAgenda(data.agenda || []);
+
+  // ── Week CRUD ──
+  const addWeek = async () => {
+    const num = Number(newWeekNum);
+    if (num == null || isNaN(num)) return showToast("Enter a week number","err");
+    if (agenda.some(w => Number(w.week) === num)) return showToast("Week "+num+" already exists","err");
+    const next = sortedAgenda([...agenda, {
+      week: num, title: newWeekTitle || ("Week "+num),
+      goal:"", items:[], topics:[], challenge:"", sneak_peek:""
+    }]);
+    await saveKey("agenda", next);
+    setNewWeekNum(""); setNewWeekTitle("");
+    showToast("Week added ✅","ok");
+  };
+
+  const deleteWeek = async (weekNum) => {
+    if (!confirm("Delete Week "+weekNum+" and all its content?")) return;
+    await saveKey("agenda", agenda.filter(w => w.week !== weekNum));
+    if (openWeek === weekNum) setOpenWeek(null);
+    showToast("Week deleted","ok");
+  };
+
+  const startEditWeek = (w) => {
+    setEditingWeek(w.week);
+    setWeekDraft({
+      title: w.title||"",
+      goal: w.goal||"",
+      challenge: w.challenge||"",
+      sneak_peek: w.sneak_peek||"",
+    });
+  };
+
+  const saveWeekMeta = async (weekNum) => {
+    const next = agenda.map(w => w.week === weekNum ? {...w, ...weekDraft} : w);
+    await saveKey("agenda", next);
+    setEditingWeek(null);
+    showToast("Week updated ✅","ok");
+  };
+
+  // ── Items CRUD ──
+  const addItem = async (weekNum) => {
+    const next = agenda.map(w => w.week === weekNum
+      ? {...w, items:[...(w.items||[]), {time:"", title:"", text:""}]}
+      : w);
+    await saveKey("agenda", next);
+  };
+
+  const updateItem = async (weekNum, idx, field, val) => {
+    const next = agenda.map(w => {
+      if (w.week !== weekNum) return w;
+      const items = (w.items||[]).map((it,i) => i===idx ? {...it,[field]:val} : it);
+      return {...w, items};
+    });
+    await saveKey("agenda", next);
+  };
+
+  const deleteItem = async (weekNum, idx) => {
+    const next = agenda.map(w => {
+      if (w.week !== weekNum) return w;
+      const items = (w.items||[]).filter((_,i) => i!==idx);
+      return {...w, items};
+    });
+    await saveKey("agenda", next);
+  };
+
+  const moveItem = async (weekNum, idx, dir) => {
+    const next = agenda.map(w => {
+      if (w.week !== weekNum) return w;
+      const items = [...(w.items||[])];
+      const to = idx + dir;
+      if (to < 0 || to >= items.length) return w;
+      [items[idx], items[to]] = [items[to], items[idx]];
+      return {...w, items};
+    });
+    await saveKey("agenda", next);
+  };
+
+  // ── Topics CRUD (for Reviews dropdowns) ──
+  const addTopic = async (weekNum, name) => {
+    if (!name.trim()) return;
+    const next = agenda.map(w => w.week === weekNum
+      ? {...w, topics:[...(w.topics||[]), {id:newTopicId(), name:name.trim()}]}
+      : w);
+    await saveKey("agenda", next);
+  };
+  const deleteTopic = async (weekNum, topicId) => {
+    const next = agenda.map(w => w.week === weekNum
+      ? {...w, topics:(w.topics||[]).filter(t=>t.id!==topicId)}
+      : w);
+    await saveKey("agenda", next);
+  };
+  const renameTopic = async (weekNum, topicId, name) => {
+    const next = agenda.map(w => w.week === weekNum
+      ? {...w, topics:(w.topics||[]).map(t=>t.id===topicId?{...t,name}:t)}
+      : w);
+    await saveKey("agenda", next);
+  };
+
+  return (
+    <div style={{animation:"fadeIn .4s"}}>
+      <h1 style={{fontWeight:900,fontSize:26,color:"#1b7a1b",marginBottom:4}}>📅 Agenda</h1>
+      <p style={{fontSize:13,color:"#6b7280",marginBottom:14}}>Session plans, topics, and weekly challenges.</p>
+
+      {/* ── Add Week (admin) ── */}
+      {canEdit && (
+        <Card bg="#ecfdf5" border="#6ee7b7">
+          <div style={{fontWeight:700,marginBottom:6}}>➕ Add a Week</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <Inp placeholder="Week # (e.g. 5)" value={newWeekNum}
+                 onChange={e=>setNewWeekNum(e.target.value)} style={{maxWidth:110,marginBottom:0}}/>
+            <Inp placeholder="Week title" value={newWeekTitle}
+                 onChange={e=>setNewWeekTitle(e.target.value)} style={{flex:1,minWidth:180,marginBottom:0}}/>
+            <Btn onClick={addWeek}>Add Week</Btn>
+          </div>
+        </Card>
+      )}
+
+      {agenda.length === 0 && <p style={{textAlign:"center",color:"#666",padding:24}}>No weeks yet.</p>}
+
+      {agenda.map(w => {
+        const isOpen = openWeek === w.week;
+        const isEditing = editingWeek === w.week;
+        return (
+          <div key={w.week} style={{background:"#fff",borderRadius:12,marginBottom:12,
+                                    border:"2px solid #d1fae5",overflow:"hidden"}}>
+            {/* ── Week Header ── */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                         padding:"12px 14px",cursor:"pointer",background:isOpen?"#f0faf0":"#fff"}}
+                 onClick={()=>setOpenWeek(isOpen?null:w.week)}>
+              <div>
+                <span style={{fontWeight:800,fontSize:15,color:"#1b7a1b"}}>
+                  {isOpen?"▼":"▶"} Week {w.week}
+                </span>
+                {!isEditing && <span style={{fontWeight:600,fontSize:14,color:"#374151",marginLeft:8}}>{w.title}</span>}
+                {w.goal && !isEditing && <div style={{fontSize:11,color:"#6b7280",marginTop:1}}>🎯 {w.goal}</div>}
+              </div>
+              {canEdit && (
+                <div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+                  <Btn color="#6b7280" style={{padding:"4px 10px",fontSize:11}}
+                       onClick={()=>isEditing?saveWeekMeta(w.week):startEditWeek(w)}>
+                    {isEditing?"💾 Save":"✏️ Edit"}
+                  </Btn>
+                  {isEditing && <Btn color="#999" style={{padding:"4px 10px",fontSize:11}}
+                                    onClick={()=>setEditingWeek(null)}>Cancel</Btn>}
+                  <Btn color="#dc2626" style={{padding:"4px 10px",fontSize:11}}
+                       onClick={()=>deleteWeek(w.week)}>🗑</Btn>
+                </div>
+              )}
+            </div>
+
+            {/* ── Inline meta editor ── */}
+            {isEditing && canEdit && (
+              <div style={{padding:"10px 14px",background:"#fffbeb",borderTop:"1px solid #fde68a"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Title</label>
+                    <Inp value={weekDraft.title} onChange={e=>setWeekDraft({...weekDraft,title:e.target.value})}
+                         placeholder="Week title" style={{marginBottom:4}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Goal</label>
+                    <Inp value={weekDraft.goal} onChange={e=>setWeekDraft({...weekDraft,goal:e.target.value})}
+                         placeholder="Session goal" style={{marginBottom:4}}/>
+                  </div>
+                </div>
+                <label style={{fontSize:11,fontWeight:700,color:"#888"}}>🏆 Challenge</label>
+                <Txt value={weekDraft.challenge} onChange={e=>setWeekDraft({...weekDraft,challenge:e.target.value})}
+                     placeholder="Weekly challenge..." style={{minHeight:50}}/>
+                <label style={{fontSize:11,fontWeight:700,color:"#888"}}>👀 Sneak Peek</label>
+                <Inp value={weekDraft.sneak_peek} onChange={e=>setWeekDraft({...weekDraft,sneak_peek:e.target.value})}
+                     placeholder="Preview of next week..." style={{marginBottom:4}}/>
+              </div>
+            )}
+
+            {/* ── Body ── */}
+            {isOpen && (
+              <div style={{padding:"12px 14px 16px"}}>
+
+                {/* ── SESSION ITEMS ── */}
+                <div style={{marginBottom:16}}>
+                  <div style={{fontWeight:800,fontSize:13,color:"#1b7a1b",marginBottom:8,display:"flex",
+                               alignItems:"center",justifyContent:"space-between"}}>
+                    <span>📋 Session Plan</span>
+                    {canEdit && <Btn style={{padding:"4px 10px",fontSize:11}} onClick={()=>addItem(w.week)}>+ Add Item</Btn>}
+                  </div>
+
+                  {(w.items||[]).length === 0 && (
+                    <p style={{fontSize:12,color:"#aaa",fontStyle:"italic"}}>No session items yet.{canEdit?" Click '+ Add Item' to start.":""}</p>
+                  )}
+
+                  {(w.items||[]).map((item, idx) => (
+                    <div key={idx} style={{borderRadius:10,marginBottom:8,border:"1px solid #d1fae5",overflow:"hidden"}}>
+                      {canEdit ? (
+                        /* ── Edit mode ── */
+                        <div style={{padding:10,background:"#f8fff8"}}>
+                          <div style={{display:"flex",gap:8,marginBottom:6,alignItems:"center",flexWrap:"wrap"}}>
+                            <Inp placeholder="⏱ Time (e.g. 10 min)" value={item.time||""}
+                                 onChange={e=>updateItem(w.week,idx,"time",e.target.value)}
+                                 style={{maxWidth:130,marginBottom:0}}/>
+                            <Inp placeholder="Title (optional)" value={item.title||""}
+                                 onChange={e=>updateItem(w.week,idx,"title",e.target.value)}
+                                 style={{flex:1,marginBottom:0}}/>
+                            <div style={{display:"flex",gap:4,flexShrink:0}}>
+                              <Btn color="#6b7280" style={{padding:"4px 8px",fontSize:12}}
+                                   onClick={()=>moveItem(w.week,idx,-1)} disabled={idx===0}>↑</Btn>
+                              <Btn color="#6b7280" style={{padding:"4px 8px",fontSize:12}}
+                                   onClick={()=>moveItem(w.week,idx,1)} disabled={idx===(w.items||[]).length-1}>↓</Btn>
+                              <Btn color="#dc2626" style={{padding:"4px 8px",fontSize:12}}
+                                   onClick={()=>deleteItem(w.week,idx)}>✕</Btn>
+                            </div>
+                          </div>
+                          <Txt placeholder="Description / instructions..." value={item.text||""}
+                               onChange={e=>updateItem(w.week,idx,"text",e.target.value)}
+                               style={{minHeight:60,marginBottom:0}}/>
+                        </div>
+                      ) : (
+                        /* ── View mode ── */
+                        <div style={{display:"flex",gap:10,padding:"8px 12px",
+                                     background:idx%2===0?"#f0faf0":"#f8fff8"}}>
+                          {item.time && (
+                            <span style={{fontSize:11,fontWeight:700,color:"#1b7a1b",background:"#d1fae5",
+                                          borderRadius:6,padding:"2px 8px",whiteSpace:"nowrap",alignSelf:"flex-start",
+                                          flexShrink:0}}>
+                              ⏱ {item.time}
+                            </span>
+                          )}
+                          <div style={{flex:1}}>
+                            {item.title && (
+                              <div style={{fontWeight:700,fontSize:13,color:"#1b4a1b",marginBottom:2}}>{item.title}</div>
+                            )}
+                            <div style={{fontSize:12,color:"#374151",lineHeight:1.65,whiteSpace:"pre-line"}}>
+                              {item.text}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── CHALLENGE & SNEAK PEEK (view) ── */}
+                {!isEditing && (w.challenge||w.sneak_peek) && (
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                    {w.challenge && (
+                      <div style={{background:"#fffbeb",border:"1px solid #fbbf24",borderRadius:8,padding:"8px 12px"}}>
+                        <div style={{fontWeight:700,fontSize:12,color:"#d97706",marginBottom:3}}>🏆 Challenge</div>
+                        <div style={{fontSize:12,color:"#374151",whiteSpace:"pre-line",lineHeight:1.6}}>{w.challenge}</div>
+                      </div>
+                    )}
+                    {w.sneak_peek && (
+                      <div style={{background:"#eff6ff",border:"1px solid #93c5fd",borderRadius:8,padding:"8px 12px"}}>
+                        <div style={{fontWeight:700,fontSize:12,color:"#1d4ed8",marginBottom:3}}>👀 Sneak Peek</div>
+                        <div style={{fontSize:12,color:"#374151",lineHeight:1.6}}>{w.sneak_peek}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── SPEECH TOPICS (for Reviews) ── */}
+                <div style={{borderTop:"1px dashed #d1fae5",paddingTop:12}}>
+                  <div style={{fontWeight:800,fontSize:13,color:"#6b7280",marginBottom:6,display:"flex",
+                               alignItems:"center",justifyContent:"space-between"}}>
+                    <span>🎤 Speech Topics <span style={{fontWeight:400,fontSize:11}}>(used for review dropdowns)</span></span>
+                  </div>
+                  {(w.topics||[]).length===0 && (
+                    <p style={{fontSize:12,color:"#bbb",fontStyle:"italic"}}>
+                      No topics yet.{canEdit?" Add topics so parents can select them when submitting reviews.":""}
+                    </p>
+                  )}
+                  {(w.topics||[]).map(t => (
+                    <div key={t.id} style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
+                      {canEdit ? (
+                        <>
+                          <Inp value={t.name}
+                               onChange={e=>renameTopic(w.week,t.id,e.target.value)}
+                               style={{flex:1,marginBottom:0}}/>
+                          <Btn color="#dc2626" style={{padding:"4px 10px",fontSize:12}}
+                               onClick={()=>deleteTopic(w.week,t.id)}>✕</Btn>
+                        </>
+                      ) : (
+                        <div style={{fontSize:13,padding:"3px 0"}}>• {t.name}</div>
+                      )}
+                    </div>
+                  ))}
+                  {canEdit && <TopicAdder onAdd={name=>addTopic(w.week,name)}/>}
+                </div>
+
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TopicAdder({ onAdd }) {
+  const [v, setV] = useState("");
+  return (
+    <div style={{display:"flex",gap:8,marginTop:8}}>
+      <Inp placeholder="New speech topic..." value={v}
+           onChange={e=>setV(e.target.value)}
+           style={{flex:1,marginBottom:0}}/>
+      <Btn onClick={()=>{ if(v.trim()){onAdd(v);setV("");} }}>+ Topic</Btn>
+    </div>
+  );
 }
 
 // ===== APPRECIATION =====
@@ -1406,7 +2857,7 @@ Visit →
 function AdminPage({data,saveKey,showToast,user}) {
 const [editKey, setEditKey] = useState("members");
 const [editJson, setEditJson] = useState("");
-const [newUser, setNewUser] = useState({u:"",p:"",role:"kid",linkedKid:[],email:"",phone:"",name: ""});
+const [newUser, setNewUser] = useState({u:"",p:"",role:"kid",linkedKids:[],email:"",phone:"",name: ""});
 const [pwEditUser, setPwEditUser] = useState("");
 const [pwEditVal, setPwEditVal] = useState("");
 
@@ -1420,11 +2871,11 @@ const u = newUser.u.toLowerCase();
 const colors=["#EF5350","#42A5F5","#AB47BC","#FF7043","#26A69A","#FFA726","#8D6E63"];
 const emojis=["🌟","🎯","🎪","🎨","🌈","🎸","🎺"];
 
-    // Display name logic: parent gets "<kids>'s Parent", others use name or username
-    const displayName = newUser.role === "parent" && newUser.linkedKid?.length
-      ? newUser.linkedKid.join(" & ") + "'s Parent"
-      : (newUser.name || u.charAt(0).toUpperCase() + u.slice(1));
 
+
+    // Display name logic: parent gets "<kids>'s Parent", others use name or username
+    const displayName = user.display;
+	  
 const nu = {
 u,
 p: newUser.p,
@@ -1435,9 +2886,9 @@ emoji: emojis[users.length % 7],
 display: displayName
 };
 
-    // ALWAYS store linkedKid as an array (even if single kid) for consistency
-    if (newUser.role === "parent" && newUser.linkedKid?.length) {
-      nu.linkedKid = [...newUser.linkedKid];
+    // ALWAYS store linkedKids as an array (even if single kid) for consistency
+    if (newUser.role === "parent" && newUser.linkedKids?.length) {
+      nu.linkedKids = [...newUser.linkedKids];
     }
     if (newUser.email) nu.email = newUser.email;
     if (newUser.phone) nu.phone = newUser.phone;
@@ -1452,7 +2903,7 @@ display: displayName
         await saveKey("members",m);
       }
     }
-    setNewUser({u:"",p:"",role:"kid",linkedKid:[],email:"",phone:"",name:""});
+    setNewUser({u:"",p:"",role:"kid",linkedKids:[],email:"",phone:"",name:""});
     showToast("User added! ✅");
   };
 
@@ -1526,7 +2977,7 @@ style={{width:110}}
 
 <Sel 
 value={newUser.role} 
-onChange={e=>setNewUser({...newUser,role:e.target.value, linkedKid: []})} 
+onChange={e=>setNewUser({...newUser,role:e.target.value, linkedKids: []})} 
 style={{width:100}}
 >
 <option value="kid">Kid</option>
@@ -1538,10 +2989,10 @@ style={{width:100}}
 {newUser.role==="parent" && (
 <Sel
 multiple
-value={newUser.linkedKid || []}
+value={newUser.linkedKids || []}
 onChange={e=>{
 const selected = Array.from(e.target.selectedOptions, option => option.value);
-setNewUser({...newUser, linkedKid: selected});
+setNewUser({...newUser, linkedKids: selected});
 }}
 style={{width:160,height:80}}
 >
@@ -1947,8 +3398,16 @@ return (<div style={{animation:"popIn .4s ease"}}>
 </div>
 <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Location</label>
 <Inp value={form.location} onChange={e=>setForm({...form,location:e.target.value})} placeholder="e.g. Zoom / Community Hall" />
-<label style={{fontSize:11,fontWeight:700,color:"#888"}}>Week/Topic</label>
-<Inp value={form.week} onChange={e=>setForm({...form,week:e.target.value})} placeholder="e.g. Week 1 - Talk It Out" />
+<label style={{fontSize:11,fontWeight:700,color:"#888"}}>Week / Session</label>
+<Sel value={form.week} onChange={e=>setForm({...form,week:e.target.value})}>
+  <option value="">-- Select a week --</option>
+  {sortedAgenda(data.agenda||[]).map(w=>(
+    <option key={w.week} value={"Week "+w.week+" — "+w.title}>
+      Week {w.week} — {w.title}
+    </option>
+  ))}
+  <option value="Other">Other / Ad-hoc</option>
+</Sel>
 <label style={{fontSize:11,fontWeight:700,color:"#888"}}>Participants (select all that attended)</label>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,padding:8,border:"2px solid #d1fae5",borderRadius:10,marginBottom:8,minHeight:40,background:"#fff"}}>
 {(data.users||[]).filter(u=>u.active).map(u=>{
@@ -2399,4 +3858,408 @@ const rootEl = document.getElementById("root");
 const root = ReactDOM.createRoot(rootEl);
 root.render(<App />);
 </script>
+
+<!-- ============================================== -->
+<!-- 🎨 FUN CHARACTER LIBRARY       -->
+<!-- ============================================== -->
+<style>
+  #funChars-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(8px);
+    border: 3px solid #a78bfa;
+    border-radius: 20px;
+    padding: 12px;
+    box-shadow: 0 8px 25px rgba(124,58,237,0.3);
+    transition: all 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+    font-family: 'Comic Sans MS', sans-serif;
+  }
+  #funChars-container.minimized {
+    padding: 6px 10px;
+  }
+  #funChars-container.minimized #funChars-stage {
+    display: none;
+  }
+  #funChars-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 10px;
+  }
+  #funChars-title {
+    font-weight: bold;
+    color: #6d28d9;
+    font-size: 14px;
+  }
+  #funChars-toggle {
+    background: #a78bfa;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s;
+  }
+  #funChars-toggle:hover { transform: scale(1.15); background: #8b5cf6; }
+  #funChars-stage {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    min-height: 110px;
+    padding: 5px;
+  }
+  .funChar {
+    cursor: pointer;
+    user-select: none;
+    transition: filter 0.2s;
+    display: inline-block;
+  }
+  .funChar:hover { filter: brightness(1.1) drop-shadow(0 0 8px gold); }
+
+  /* ---------- Animations ---------- */
+  @keyframes fc-bounce {
+    0%,100% { transform: translateY(0); }
+    50%     { transform: translateY(-25px); }
+  }
+  @keyframes fc-wiggle {
+    0%,100% { transform: rotate(-8deg); }
+    50%     { transform: rotate(8deg); }
+  }
+  @keyframes fc-dance {
+    0%   { transform: rotate(-5deg) translateY(0); }
+    25%  { transform: rotate(5deg)  translateY(-8px); }
+    50%  { transform: rotate(-5deg) translateY(0); }
+    75%  { transform: rotate(5deg)  translateY(-8px); }
+    100% { transform: rotate(-5deg) translateY(0); }
+  }
+  @keyframes fc-spin {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  @keyframes fc-jump {
+    0%,100% { transform: translateY(0) scaleY(1); }
+    30%     { transform: translateY(0) scaleY(0.8); }
+    60%     { transform: translateY(-40px) scaleY(1.1); }
+  }
+  @keyframes fc-shake {
+    0%,100% { transform: translateX(0); }
+    25%     { transform: translateX(-6px); }
+    75%     { transform: translateX(6px); }
+  }
+  @keyframes fc-idle {
+    0%,100% { transform: translateY(0); }
+    50%     { transform: translateY(-4px); }
+  }
+  @keyframes fc-balloon-float {
+    0%,100% { transform: translateY(0) rotate(-3deg); }
+    50%     { transform: translateY(-5px) rotate(3deg); }
+  }
+  @keyframes fc-sparkle {
+    0%,100% { opacity: 0; transform: scale(0.5); }
+    50%     { opacity: 1; transform: scale(1.2); }
+  }
+
+  .fc-anim-bounce { animation: fc-bounce 0.5s ease-in-out 3; }
+  .fc-anim-wiggle { animation: fc-wiggle 0.3s ease-in-out 5; }
+  .fc-anim-dance  { animation: fc-dance  0.6s ease-in-out 4; }
+  .fc-anim-spin   { animation: fc-spin   0.8s linear 2; }
+  .fc-anim-jump   { animation: fc-jump   0.7s ease-out 2; }
+  .fc-anim-shake  { animation: fc-shake  0.2s ease-in-out 6; }
+  .fc-idle        { animation: fc-idle 2s ease-in-out infinite; }
+
+  .fc-prop-balloon {
+    animation: fc-balloon-float 2s ease-in-out infinite;
+    transform-origin: bottom center;
+  }
+  .fc-sparkle {
+    position: absolute;
+    pointer-events: none;
+    font-size: 20px;
+    animation: fc-sparkle 0.8s ease-out forwards;
+  }
+</style>
+
+<div id="funChars-container">
+  <div id="funChars-header">
+    <span id="funChars-title">🎭 Fun Friends</span>
+    <button id="funChars-toggle" title="Minimize/Maximize">−</button>
+  </div>
+  <div id="funChars-stage"></div>
+</div>
+
+<script>
+(function() {
+  // ============ CHARACTER SVG DEFINITIONS ============
+  // Each character is a function returning SVG string.
+  // Props: hat, balloon, skateboard, wand, bowtie, glasses
+  const PROPS = {
+    hat: `<g><ellipse cx="40" cy="18" rx="22" ry="3" fill="#7c2d12"/><rect x="28" y="4" width="24" height="16" rx="2" fill="#dc2626"/><rect x="28" y="14" width="24" height="4" fill="#fbbf24"/></g>`,
+    balloon: `<g class="fc-prop-balloon"><line x1="70" y1="40" x2="72" y2="75" stroke="#555" stroke-width="1.5"/><ellipse cx="70" cy="30" rx="10" ry="13" fill="#ef4444"/><ellipse cx="67" cy="26" rx="3" ry="4" fill="#fca5a5"/><polygon points="68,42 72,42 70,46" fill="#ef4444"/></g>`,
+    skateboard: `<g><ellipse cx="40" cy="112" rx="32" ry="3" fill="#1f2937"/><rect x="10" y="108" width="60" height="5" rx="2" fill="#f59e0b"/><circle cx="20" cy="116" r="3" fill="#111"/><circle cx="60" cy="116" r="3" fill="#111"/></g>`,
+    wand: `<g><line x1="72" y1="20" x2="85" y2="5" stroke="#92400e" stroke-width="3" stroke-linecap="round"/><text x="82" y="8" font-size="14">⭐</text></g>`,
+    bowtie: `<g><polygon points="30,60 40,55 40,65" fill="#dc2626"/><polygon points="50,60 40,55 40,65" fill="#dc2626"/><circle cx="40" cy="60" r="2" fill="#fbbf24"/></g>`,
+    glasses: `<g><circle cx="32" cy="38" r="6" fill="none" stroke="#111" stroke-width="2"/><circle cx="48" cy="38" r="6" fill="none" stroke="#111" stroke-width="2"/><line x1="38" y1="38" x2="42" y2="38" stroke="#111" stroke-width="2"/></g>`
+  };
+
+  // Characters: each takes an optional prop key
+  const CHARACTERS = {
+    bunny: (prop) => `
+      <svg width="80" height="120" viewBox="0 0 80 120">
+        ${prop === 'skateboard' ? PROPS.skateboard : ''}
+        <ellipse cx="30" cy="15" rx="5" ry="15" fill="#fdf2f8" stroke="#ec4899" stroke-width="2"/>
+        <ellipse cx="50" cy="15" rx="5" ry="15" fill="#fdf2f8" stroke="#ec4899" stroke-width="2"/>
+        <ellipse cx="30" cy="17" rx="2" ry="8" fill="#fbcfe8"/>
+        <ellipse cx="50" cy="17" rx="2" ry="8" fill="#fbcfe8"/>
+        <circle cx="40" cy="45" r="22" fill="#fdf2f8" stroke="#ec4899" stroke-width="2"/>
+        <circle cx="32" cy="42" r="3" fill="#111"/>
+        <circle cx="48" cy="42" r="3" fill="#111"/>
+        <circle cx="33" cy="41" r="1" fill="#fff"/>
+        <circle cx="49" cy="41" r="1" fill="#fff"/>
+        <ellipse cx="40" cy="50" rx="2" ry="1.5" fill="#ec4899"/>
+        <path d="M 35 55 Q 40 60 45 55" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <ellipse cx="40" cy="85" rx="18" ry="20" fill="#fdf2f8" stroke="#ec4899" stroke-width="2"/>
+        ${prop === 'hat' ? PROPS.hat : ''}
+        ${prop === 'balloon' ? PROPS.balloon : ''}
+        ${prop === 'bowtie' ? PROPS.bowtie : ''}
+        ${prop === 'glasses' ? PROPS.glasses : ''}
+        ${prop === 'wand' ? PROPS.wand : ''}
+      </svg>`,
+
+    bear: (prop) => `
+      <svg width="80" height="120" viewBox="0 0 80 120">
+        ${prop === 'skateboard' ? PROPS.skateboard : ''}
+        <circle cx="24" cy="22" r="7" fill="#92400e"/>
+        <circle cx="56" cy="22" r="7" fill="#92400e"/>
+        <circle cx="24" cy="22" r="3" fill="#fbbf24"/>
+        <circle cx="56" cy="22" r="3" fill="#fbbf24"/>
+        <circle cx="40" cy="42" r="24" fill="#b45309"/>
+        <circle cx="40" cy="50" r="12" fill="#fcd34d"/>
+        <circle cx="32" cy="40" r="3" fill="#111"/>
+        <circle cx="48" cy="40" r="3" fill="#111"/>
+        <ellipse cx="40" cy="48" rx="3" ry="2" fill="#111"/>
+        <path d="M 35 54 Q 40 58 45 54" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <ellipse cx="40" cy="85" rx="20" ry="22" fill="#b45309"/>
+        <ellipse cx="40" cy="90" rx="10" ry="12" fill="#fcd34d"/>
+        ${prop === 'hat' ? PROPS.hat : ''}
+        ${prop === 'balloon' ? PROPS.balloon : ''}
+        ${prop === 'bowtie' ? PROPS.bowtie : ''}
+        ${prop === 'glasses' ? PROPS.glasses : ''}
+        ${prop === 'wand' ? PROPS.wand : ''}
+      </svg>`,
+
+    cat: (prop) => `
+      <svg width="80" height="120" viewBox="0 0 80 120">
+        ${prop === 'skateboard' ? PROPS.skateboard : ''}
+        <polygon points="20,25 28,5 35,25" fill="#f97316"/>
+        <polygon points="45,25 52,5 60,25" fill="#f97316"/>
+        <polygon points="24,22 28,12 32,22" fill="#fecaca"/>
+        <polygon points="48,22 52,12 56,22" fill="#fecaca"/>
+        <circle cx="40" cy="42" r="22" fill="#f97316"/>
+        <ellipse cx="32" cy="42" rx="3" ry="4" fill="#111"/>
+        <ellipse cx="48" cy="42" rx="3" ry="4" fill="#111"/>
+        <circle cx="33" cy="41" r="1" fill="#fff"/>
+        <circle cx="49" cy="41" r="1" fill="#fff"/>
+        <polygon points="38,48 42,48 40,52" fill="#111"/>
+        <path d="M 36 54 Q 40 57 44 54" stroke="#111" stroke-width="1.5" fill="none"/>
+        <line x1="18" y1="45" x2="28" y2="46" stroke="#111" stroke-width="1"/>
+        <line x1="18" y1="48" x2="28" y2="48" stroke="#111" stroke-width="1"/>
+        <line x1="52" y1="46" x2="62" y2="45" stroke="#111" stroke-width="1"/>
+        <line x1="52" y1="48" x2="62" y2="48" stroke="#111" stroke-width="1"/>
+        <ellipse cx="40" cy="85" rx="18" ry="20" fill="#f97316"/>
+        <path d="M 58 90 Q 70 80 68 65" stroke="#f97316" stroke-width="6" fill="none" stroke-linecap="round"/>
+        ${prop === 'hat' ? PROPS.hat : ''}
+        ${prop === 'balloon' ? PROPS.balloon : ''}
+        ${prop === 'bowtie' ? PROPS.bowtie : ''}
+        ${prop === 'glasses' ? PROPS.glasses : ''}
+        ${prop === 'wand' ? PROPS.wand : ''}
+      </svg>`,
+
+    robot: (prop) => `
+      <svg width="80" height="120" viewBox="0 0 80 120">
+        ${prop === 'skateboard' ? PROPS.skateboard : ''}
+        <line x1="40" y1="10" x2="40" y2="20" stroke="#64748b" stroke-width="2"/>
+        <circle cx="40" cy="8" r="3" fill="#ef4444"/>
+        <rect x="22" y="20" width="36" height="32" rx="4" fill="#94a3b8" stroke="#475569" stroke-width="2"/>
+        <circle cx="32" cy="34" r="4" fill="#38bdf8"/>
+        <circle cx="48" cy="34" r="4" fill="#38bdf8"/>
+        <circle cx="32" cy="34" r="2" fill="#fff"/>
+        <circle cx="48" cy="34" r="2" fill="#fff"/>
+        <rect x="32" y="44" width="16" height="4" rx="1" fill="#475569"/>
+        <rect x="25" y="55" width="30" height="35" rx="3" fill="#cbd5e1" stroke="#475569" stroke-width="2"/>
+        <circle cx="33" cy="68" r="2" fill="#ef4444"/>
+        <circle cx="40" cy="68" r="2" fill="#fbbf24"/>
+        <circle cx="47" cy="68" r="2" fill="#22c55e"/>
+        <rect x="30" y="76" width="20" height="8" rx="1" fill="#475569"/>
+        ${prop === 'hat' ? PROPS.hat : ''}
+        ${prop === 'balloon' ? PROPS.balloon : ''}
+        ${prop === 'bowtie' ? PROPS.bowtie : ''}
+        ${prop === 'glasses' ? PROPS.glasses : ''}
+        ${prop === 'wand' ? PROPS.wand : ''}
+      </svg>`,
+
+    monster: (prop) => `
+      <svg width="80" height="120" viewBox="0 0 80 120">
+        ${prop === 'skateboard' ? PROPS.skateboard : ''}
+        <circle cx="25" cy="18" r="3" fill="#7c3aed"/>
+        <circle cx="55" cy="18" r="3" fill="#7c3aed"/>
+        <line x1="25" y1="21" x2="28" y2="32" stroke="#7c3aed" stroke-width="2"/>
+        <line x1="55" y1="21" x2="52" y2="32" stroke="#7c3aed" stroke-width="2"/>
+        <ellipse cx="40" cy="55" rx="28" ry="35" fill="#7c3aed"/>
+        <circle cx="30" cy="42" r="7" fill="#fff"/>
+        <circle cx="50" cy="42" r="7" fill="#fff"/>
+        <circle cx="30" cy="43" r="4" fill="#111"/>
+        <circle cx="50" cy="43" r="4" fill="#111"/>
+        <circle cx="31" cy="41" r="1.5" fill="#fff"/>
+        <circle cx="51" cy="41" r="1.5" fill="#fff"/>
+        <path d="M 28 62 Q 40 72 52 62 L 52 65 Q 40 75 28 65 Z" fill="#111"/>
+        <rect x="32" y="62" width="2" height="4" fill="#fff"/>
+        <rect x="38" y="62" width="2" height="4" fill="#fff"/>
+        <rect x="44" y="62" width="2" height="4" fill="#fff"/>
+        ${prop === 'hat' ? PROPS.hat : ''}
+        ${prop === 'balloon' ? PROPS.balloon : ''}
+        ${prop === 'bowtie' ? PROPS.bowtie : ''}
+        ${prop === 'glasses' ? PROPS.glasses : ''}
+        ${prop === 'wand' ? PROPS.wand : ''}
+      </svg>`,
+
+    penguin: (prop) => `
+      <svg width="80" height="120" viewBox="0 0 80 120">
+        ${prop === 'skateboard' ? PROPS.skateboard : ''}
+        <ellipse cx="40" cy="60" rx="25" ry="40" fill="#111827"/>
+        <ellipse cx="40" cy="65" rx="16" ry="30" fill="#fff"/>
+        <circle cx="33" cy="40" r="3" fill="#111"/>
+        <circle cx="47" cy="40" r="3" fill="#111"/>
+        <circle cx="34" cy="39" r="1" fill="#fff"/>
+        <circle cx="48" cy="39" r="1" fill="#fff"/>
+        <polygon points="36,46 44,46 40,52" fill="#f59e0b"/>
+        <ellipse cx="18" cy="60" rx="5" ry="12" fill="#111827"/>
+        <ellipse cx="62" cy="60" rx="5" ry="12" fill="#111827"/>
+        <ellipse cx="33" cy="100" rx="6" ry="3" fill="#f59e0b"/>
+        <ellipse cx="47" cy="100" rx="6" ry="3" fill="#f59e0b"/>
+        ${prop === 'hat' ? PROPS.hat : ''}
+        ${prop === 'balloon' ? PROPS.balloon : ''}
+        ${prop === 'bowtie' ? PROPS.bowtie : ''}
+        ${prop === 'glasses' ? PROPS.glasses : ''}
+        ${prop === 'wand' ? PROPS.wand : ''}
+      </svg>`
+  };
+
+  // ============ LIBRARY LOGIC ============
+  const ANIMATIONS = ['bounce','wiggle','dance','spin','jump','shake'];
+  const PROP_KEYS = ['hat','balloon','skateboard','wand','bowtie','glasses', null];
+  const SOUNDS = ['🎵','✨','⭐','💫','🎉','💖','🌟'];
+
+  function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  function showSparkle(el) {
+    const rect = el.getBoundingClientRect();
+    const s = document.createElement('div');
+    s.className = 'fc-sparkle';
+    s.textContent = rand(SOUNDS);
+    s.style.left = (rect.left + rect.width/2) + 'px';
+    s.style.top  = (rect.top - 10) + 'px';
+    s.style.position = 'fixed';
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 800);
+  }
+
+  function playAnimation(el, animName) {
+    // Clear old animations
+    ANIMATIONS.forEach(a => el.classList.remove('fc-anim-' + a));
+    el.classList.remove('fc-idle');
+    void el.offsetWidth; // reflow
+
+    // Random speed (0.5x to 1.5x)
+    const speed = (0.5 + Math.random()).toFixed(2);
+    el.style.animationDuration = '';
+    el.classList.add('fc-anim-' + animName);
+    // Override with random speed via inline
+    const base = getComputedStyle(el).animationDuration;
+    el.style.animationDuration = (parseFloat(base) / speed) + 's';
+
+    showSparkle(el);
+
+    // Return to idle after animation
+    const handler = () => {
+      el.classList.remove('fc-anim-' + animName);
+      el.style.animationDuration = '';
+      el.classList.add('fc-idle');
+      el.removeEventListener('animationend', handler);
+    };
+    el.addEventListener('animationend', handler);
+  }
+
+  function createCharacter(name, prop) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'funChar fc-idle';
+    wrapper.innerHTML = CHARACTERS[name](prop);
+    // Random idle speed
+    wrapper.style.animationDuration = (1.5 + Math.random() * 1.5).toFixed(2) + 's';
+    wrapper.addEventListener('click', () => {
+      playAnimation(wrapper, rand(ANIMATIONS));
+    });
+    return wrapper;
+  }
+
+  function populateStage(count = 3) {
+    const stage = document.getElementById('funChars-stage');
+    stage.innerHTML = '';
+    const charNames = Object.keys(CHARACTERS);
+    const shuffled = [...charNames].sort(() => Math.random() - 0.5);
+    for (let i = 0; i < count; i++) {
+      const name = shuffled[i % shuffled.length];
+      const prop = rand(PROP_KEYS);
+      stage.appendChild(createCharacter(name, prop));
+    }
+  }
+
+  // Minimize/maximize
+  const container = document.getElementById('funChars-container');
+  const toggleBtn = document.getElementById('funChars-toggle');
+  let minimized = false;
+  toggleBtn.addEventListener('click', () => {
+    minimized = !minimized;
+    container.classList.toggle('minimized', minimized);
+    toggleBtn.textContent = minimized ? '+' : '−';
+    toggleBtn.title = minimized ? 'Show characters' : 'Hide characters';
+  });
+
+  // Auto-wiggle occasionally to feel alive
+  setInterval(() => {
+    if (minimized) return;
+    const chars = document.querySelectorAll('.funChar');
+    if (chars.length && Math.random() < 0.5) {
+      playAnimation(rand(Array.from(chars)), rand(ANIMATIONS));
+    }
+  }, 4000);
+
+  // Expose API globally so other pages can call it
+  window.FunChars = {
+    refresh: (n) => populateStage(n || 3),
+    minimize: () => { minimized = true; container.classList.add('minimized'); toggleBtn.textContent='+'; },
+    maximize: () => { minimized = false; container.classList.remove('minimized'); toggleBtn.textContent='−'; },
+    playRandom: () => {
+      const chars = document.querySelectorAll('.funChar');
+      if (chars.length) playAnimation(rand(Array.from(chars)), rand(ANIMATIONS));
+    }
+  };
+
+  // Initial load — random characters on each page load
+  populateStage(3);
+})();
+</script>
+<!-- ============================================== -->
+<!-- 🎨 END FUN CHARACTER LIBRARY                    -->
+<!-- ============================================== -->
+
 </body>
