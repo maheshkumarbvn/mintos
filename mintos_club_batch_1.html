@@ -621,6 +621,7 @@ function App() {
 const [loading, setLoading] = useState(true);
 const [user, setUser] = useState(null);
 const [page, setPage] = useState("home");
+const [showLogin, setShowLogin] = useState(false);
 const [toast, setToast] = useState(null);
 const [menuOpen, setMenuOpen] = useState(false);
 const [showPwModal, setShowPwModal] = useState(false);
@@ -760,7 +761,22 @@ const goTo=(pg)=>{setPage(pg);sessionRef.current.pages.push(pg);track("pageView"
 
 if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f0faf0",fontFamily:"'Nunito',sans-serif"}}><div style={{textAlign:"center"}}><div style={{fontSize:64,marginBottom:12,animation:"bounce 1s infinite"}}>\ud83c\udf43</div><div style={{fontSize:20,fontWeight:700,color:"#1b7a1b"}}>Loading MinTos Club...</div><div style={{fontSize:12,color:"#888",marginTop:4}}>Connecting to cloud...</div></div></div>;
 
-if(!user) return <LoginScreen loginForm={loginForm} setLoginForm={setLoginForm} doLogin={doLogin} toast={toast} />;
+if(!user) return showLogin
+  ? <LoginScreen loginForm={loginForm} setLoginForm={setLoginForm} doLogin={doLogin} toast={toast} onBack={()=>setShowLogin(false)} />
+  : <div style={{minHeight:"100vh",background:"#f0faf0",fontFamily:"'Nunito',sans-serif"}}>
+      <div style={{maxWidth:1200,margin:"0 auto",padding:"12px 10px"}}>
+        <div style={{background:"linear-gradient(135deg,#1b7a1b,#3da33d 50%,#6fcf6f)",borderRadius:20,padding:32,color:"#fff",display:"flex",alignItems:"center",gap:24,marginBottom:20,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
+          <button onClick={()=>setShowLogin(true)} style={{position:"absolute",top:16,right:16,padding:"10px 22px",border:"2px solid #fff",borderRadius:999,background:"rgba(255,255,255,.15)",color:"#fff",fontFamily:"inherit",fontSize:14,fontWeight:800,cursor:"pointer",backdropFilter:"blur(4px)",zIndex:2}}>🔑 Login</button>
+          <img src={COACH_SRC} alt="Mr. MinTo" style={{width:140,borderRadius:14,filter:"drop-shadow(0 6px 12px rgba(0,0,0,.2))",position:"relative",zIndex:1}} />
+          <div style={{flex:1,minWidth:260}}>
+            <h2 style={{fontWeight:900,fontSize:28,marginBottom:6}}>Welcome to MinTos Club! 🎤</h2>
+            <p style={{fontSize:14,opacity:.92,lineHeight:1.6}}>MinTos is a small-group program designed to help kids build confidence, communication skills, and creativity through fun and interactive speaking activities.</p>
+            <p style={{marginTop:6,fontSize:14,opacity:.92,lineHeight:1.6}}>Through games, talking about articles, short speeches, and group activities, kids learn to organize thoughts, speak clearly, and express themselves at a comfortable pace.</p>
+            <p style={{marginTop:8,fontWeight:800,fontSize:16}}>The focus is on enjoying the process and building self-confidence! ✨</p>
+          </div>
+        </div>
+      </div>
+    </div>;
 
 // ===== navigation pages =====
 const navPages=[
@@ -860,23 +876,15 @@ return (
 </div>
 );
 }
-
 // ===== LOGIN SCREEN =====
-function LoginScreen({loginForm,setLoginForm,doLogin,toast}) {
+// Now only renders the login card. The welcome/intro banner lives on HomePage.
+// Pass `onBack` to let users return to the home page without logging in.
+function LoginScreen({loginForm,setLoginForm,doLogin,toast,onBack}) {
 return (
-<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(160deg,#e9f7e9,#b6e6b6 40%,#78d078)",fontFamily:"'Nunito',sans-serif"}}>
+<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(160deg,#e9f7e9,#b6e6b6 40%,#78d078)",fontFamily:"'Nunito',sans-serif",padding:20}}>
 
-<div style={{background:"linear-gradient(135deg,#1b7a1b,#3da33d 50%,#6fcf6f)",borderRadius:20,padding:32,color:"#fff",display:"flex",alignItems:"center",gap:24,marginBottom:20,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
-<img src={COACH_SRC} alt="Mr. MinTo" style={{width:140,borderRadius:14,filter:"drop-shadow(0 6px 12px rgba(0,0,0,.2))",position:"relative",zIndex:1}} />
-<div style={{flex:1,minWidth:260}}>
-<h2 style={{fontWeight:900,fontSize:28,marginBottom:6}}>Welcome to MinTos Club! 🎤</h2>
-<p style={{fontSize:14,opacity:.92,lineHeight:1.6}}>MinTos is a small-group program designed to help kids build confidence, communication skills, and creativity through fun and interactive speaking activities.</p>
-<p style={{marginTop:6,fontSize:14,opacity:.92,lineHeight:1.6}}>Through games, talking about articles, short speeches, and group activities, kids learn to organize thoughts, speak clearly, and express themselves at a comfortable pace.</p>
-<p style={{marginTop:8,fontWeight:800,fontSize:16}}>The focus is on enjoying the process and building self-confidence! ✨</p>
-</div>
-</div>
-
-<div style={{background:"#fff",borderRadius:20,padding:"40px 34px",width:420,maxWidth:"92vw",boxShadow:"0 8px 32px rgba(30,120,30,.14)",textAlign:"center"}}>
+<div style={{background:"#fff",borderRadius:20,padding:"40px 34px",width:420,maxWidth:"92vw",boxShadow:"0 8px 32px rgba(30,120,30,.14)",textAlign:"center",position:"relative"}}>
+{onBack && <button onClick={onBack} style={{position:"absolute",top:14,left:14,background:"none",border:"none",fontSize:13,fontWeight:700,color:"#1b7a1b",cursor:"pointer"}}>← Back</button>}
 <img src={LOGO_SRC} alt="MinTos" style={{width:130,marginBottom:10,filter:"drop-shadow(0 3px 8px rgba(0,0,0,.12))"}} />
 <h1 style={{fontWeight:900,fontSize:28,color:"#1b7a1b"}}>MinTos Club</h1>
 <p style={{fontSize:12,color:"#6b7280",marginBottom:22,fontWeight:600,letterSpacing:.3}}>LET'S GROW TOGETHER! 🌱</p>
@@ -899,6 +907,7 @@ Contact your club admin for login credentials.
 }
 
 // ===== HOME PAGE =====
+// Accepts `onLoginClick` so the header Login button can switch to the login screen.
 function HomePage() {
 return (<div style={{animation:"fadeIn .4s ease"}}>
 <div style={{background:"linear-gradient(135deg,#1b7a1b,#3da33d 50%,#6fcf6f)",borderRadius:20,padding:32,color:"#fff",display:"flex",alignItems:"center",gap:24,marginBottom:20,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
