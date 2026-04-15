@@ -763,20 +763,7 @@ if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"cen
 
 if(!user) return showLogin
   ? <LoginScreen loginForm={loginForm} setLoginForm={setLoginForm} doLogin={doLogin} toast={toast} onBack={()=>setShowLogin(false)} />
-  : <div style={{minHeight:"100vh",background:"#f0faf0",fontFamily:"'Nunito',sans-serif"}}>
-      <div style={{maxWidth:1200,margin:"0 auto",padding:"12px 10px"}}>
-        <div style={{background:"linear-gradient(135deg,#1b7a1b,#3da33d 50%,#6fcf6f)",borderRadius:20,padding:32,color:"#fff",display:"flex",alignItems:"center",gap:24,marginBottom:20,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
-          <button onClick={()=>setShowLogin(true)} style={{position:"absolute",top:16,right:16,padding:"10px 22px",border:"2px solid #fff",borderRadius:999,background:"rgba(255,255,255,.15)",color:"#fff",fontFamily:"inherit",fontSize:14,fontWeight:800,cursor:"pointer",backdropFilter:"blur(4px)",zIndex:2}}>🔑 Login</button>
-          <img src={COACH_SRC} alt="Mr. MinTo" style={{width:140,borderRadius:14,filter:"drop-shadow(0 6px 12px rgba(0,0,0,.2))",position:"relative",zIndex:1}} />
-          <div style={{flex:1,minWidth:260}}>
-            <h2 style={{fontWeight:900,fontSize:28,marginBottom:6}}>Welcome to MinTos Club! 🎤</h2>
-            <p style={{fontSize:14,opacity:.92,lineHeight:1.6}}>MinTos is a small-group program designed to help kids build confidence, communication skills, and creativity through fun and interactive speaking activities.</p>
-            <p style={{marginTop:6,fontSize:14,opacity:.92,lineHeight:1.6}}>Through games, talking about articles, short speeches, and group activities, kids learn to organize thoughts, speak clearly, and express themselves at a comfortable pace.</p>
-            <p style={{marginTop:8,fontWeight:800,fontSize:16}}>The focus is on enjoying the process and building self-confidence! ✨</p>
-          </div>
-        </div>
-      </div>
-    </div>;
+  : <LandingPage onLoginClick={()=>setShowLogin(true)} />;
 
 // ===== navigation pages =====
 const navPages=[
@@ -876,6 +863,175 @@ return (
 </div>
 );
 }
+
+// ===== LANDING PAGE (logged-out) =====
+// Public welcome page with optional fun sections. Each section is independent —
+// comment out or remove any block without affecting the others.
+function LandingPage({onLoginClick}) {
+
+  // === SNIPPET 2: DID YOU KNOW (state) ===
+  const SPEAKING_FACTS = [
+    "🧠 Your brain LOVES it when you speak out loud — it remembers things 50% better!",
+    "🦋 Even superheroes get butterflies before speaking. The trick? Take a deep breath and smile!",
+    "👂 Great speakers are great listeners first. Ears before mouth!",
+    "🎤 The shortest famous speech ever was just 272 words long — the Gettysburg Address!",
+    "😀 Smiling while you speak actually makes your voice sound friendlier — even on the phone!",
+    "🐢 Speaking SLOWER makes you sound MORE confident, not less. Try it!",
+    "✋ Using your hands when you speak helps your brain find the right words faster.",
+    "🌟 Every great speaker was once a beginner who was brave enough to try.",
+    "🎭 Pretending to be confident actually makes you BECOME confident — fake it till you make it!",
+    "📚 Reading out loud for 10 minutes a day can make you a better speaker in just one month."
+  ];
+  const [factIdx, setFactIdx] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setFactIdx(i => (i + 1) % SPEAKING_FACTS.length), 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  // === SNIPPET 3: TONGUE TWISTER (state) ===
+  const TONGUE_TWISTERS = [
+    "She sells seashells by the seashore.",
+    "Red lorry, yellow lorry, red lorry, yellow lorry.",
+    "Peter Piper picked a peck of pickled peppers.",
+    "How much wood would a woodchuck chuck if a woodchuck could chuck wood?",
+    "Fuzzy Wuzzy was a bear, Fuzzy Wuzzy had no hair.",
+    "Six slippery snails slid slowly seaward.",
+    "A proper copper coffee pot.",
+    "Toy boat, toy boat, toy boat!",
+    "Unique New York, unique New York.",
+    "Betty Botter bought some butter, but she said the butter's bitter."
+  ];
+  const [twisterIdx, setTwisterIdx] = useState(() => Math.floor(Math.random() * TONGUE_TWISTERS.length));
+  const [twisterWiggle, setTwisterWiggle] = useState(false);
+  const newTwister = () => {
+    let next = twisterIdx;
+    while (next === twisterIdx && TONGUE_TWISTERS.length > 1) {
+      next = Math.floor(Math.random() * TONGUE_TWISTERS.length);
+    }
+    setTwisterIdx(next);
+    setTwisterWiggle(true);
+    setTimeout(() => setTwisterWiggle(false), 500);
+  };
+
+  // === SNIPPET 4: WORD OF THE DAY (daily picker) ===
+  const WORDS = [
+    {w:"Brave",       d:"Doing something even when it feels a little bit scary.",       ex:"It was brave of you to speak first today!"},
+    {w:"Kindness",    d:"Being friendly, gentle, and caring to others.",                 ex:"Your kindness made everyone smile."},
+    {w:"Curious",     d:"Really wanting to learn or know more about something.",         ex:"Curious kids ask the best questions!"},
+    {w:"Confident",   d:"Believing that you can do something well.",                     ex:"She felt confident before her speech."},
+    {w:"Imagine",     d:"To picture something fun or new in your mind.",                 ex:"Imagine you are speaking to a stadium of friends!"},
+    {w:"Encourage",   d:"To say or do something that makes someone feel braver.",        ex:"We encourage each other in MinTos Club."},
+    {w:"Fantastic",   d:"Really, really wonderful — better than just good.",             ex:"That was a fantastic story!"},
+    {w:"Listen",      d:"To pay close attention to what someone is saying.",             ex:"Good speakers listen as much as they talk."},
+    {w:"Practice",    d:"Doing something again and again so you get better at it.",      ex:"A little practice every day adds up fast."},
+    {w:"Sparkle",     d:"To shine in a bright, happy, special way.",                     ex:"Your smile makes your speech sparkle!"},
+    {w:"Mighty",      d:"Very strong or powerful — even if you're small!",               ex:"You have a mighty voice today."},
+    {w:"Adventure",   d:"An exciting journey or experience.",                            ex:"Every speech is a little adventure."},
+    {w:"Celebrate",   d:"To do something fun because of a happy moment.",                ex:"Let's celebrate every brave try!"},
+    {w:"Friendship",  d:"The warm feeling of caring about someone you like a lot.",      ex:"Friendship makes MinTos extra fun."},
+    {w:"Wonderful",   d:"Amazing, surprising, and full of wonder.",                       ex:"You did a wonderful job sharing your idea."}
+  ];
+  const today = new Date();
+  const dayOfYear = Math.floor((today - new Date(today.getFullYear(),0,0)) / 86400000);
+  const wod = WORDS[dayOfYear % WORDS.length];
+
+  // === SNIPPET 5: CONFETTI ON LOGIN ===
+  const [confetti, setConfetti] = useState([]);
+  const handleLoginWithConfetti = () => {
+    const pieces = Array.from({length:24}, (_,i) => ({
+      id: Date.now() + i,
+      left: 50 + (Math.random() - 0.5) * 60,
+      emoji: ["🎉","✨","🌟","🎊","💚","🎤"][i % 6],
+      delay: Math.random() * 0.2,
+      dur: 0.9 + Math.random() * 0.6
+    }));
+    setConfetti(pieces);
+    setTimeout(() => { setConfetti([]); onLoginClick(); }, 700);
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(180deg,#f0faf0 0%,#e9f7e9 100%)",fontFamily:"'Nunito',sans-serif"}}>
+
+      {/* === SNIPPET 5: CONFETTI OVERLAY === */}
+      {confetti.length > 0 && (
+        <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:9998,overflow:"hidden"}}>
+          {confetti.map(c => (
+            <div key={c.id} style={{position:"absolute",top:0,left:c.left+"%",fontSize:28,animation:`confettiFall ${c.dur}s ${c.delay}s ease-in forwards`}}>
+              {c.emoji}
+            </div>
+          ))}
+          <style>{`@keyframes confettiFall{0%{transform:translateY(-20px) rotate(0deg);opacity:1}100%{transform:translateY(120vh) rotate(720deg);opacity:0}}`}</style>
+        </div>
+      )}
+
+      {/* === SNIPPET 1: STICKY TOP LOGIN BUTTON === */}
+      <button
+        onClick={handleLoginWithConfetti}
+        style={{
+          position:"fixed", top:16, right:16, zIndex:1000,
+          padding:"10px 22px", border:"2px solid #fff", borderRadius:999,
+          background:"linear-gradient(135deg,#3da33d,#1b7a1b)", color:"#fff",
+          fontFamily:"inherit", fontSize:14, fontWeight:800, cursor:"pointer",
+          boxShadow:"0 4px 14px rgba(0,0,0,.18)"
+        }}
+      >🔑 Login</button>
+
+      <div style={{maxWidth:1200,margin:"0 auto",padding:"12px 10px"}}>
+
+        {/* HERO BANNER (no in-banner login button — sticky one above handles it) */}
+        <div style={{background:"linear-gradient(135deg,#1b7a1b,#3da33d 50%,#6fcf6f)",borderRadius:20,padding:32,color:"#fff",display:"flex",alignItems:"center",gap:24,marginBottom:20,position:"relative",overflow:"hidden",flexWrap:"wrap"}}>
+          <img src={COACH_SRC} alt="Mr. MinTo" style={{width:140,borderRadius:14,filter:"drop-shadow(0 6px 12px rgba(0,0,0,.2))",position:"relative",zIndex:1}} />
+          <div style={{flex:1,minWidth:260}}>
+            <h2 style={{fontWeight:900,fontSize:28,marginBottom:6}}>Welcome to MinTos Club! 🎤</h2>
+            <p style={{fontSize:14,opacity:.92,lineHeight:1.6}}>MinTos is a small-group program designed to help kids build confidence, communication skills, and creativity through fun and interactive speaking activities.</p>
+            <p style={{marginTop:6,fontSize:14,opacity:.92,lineHeight:1.6}}>Through games, talking about articles, short speeches, and group activities, kids learn to organize thoughts, speak clearly, and express themselves at a comfortable pace.</p>
+            <p style={{marginTop:8,fontWeight:800,fontSize:16}}>The focus is on enjoying the process and building self-confidence! ✨</p>
+          </div>
+        </div>
+
+        {/* === SNIPPET 2: DID YOU KNOW CARD === */}
+        <div style={{background:"linear-gradient(135deg,#dbeafe,#bfdbfe)",border:"2px solid #60a5fa",borderRadius:18,padding:20,marginBottom:20,minHeight:140,position:"relative",overflow:"hidden"}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#1d4ed8",textTransform:"uppercase",letterSpacing:.5,marginBottom:8}}>💡 Did You Know?</div>
+          <p key={factIdx} style={{fontSize:15,fontWeight:700,color:"#1e3a8a",lineHeight:1.5,animation:"factFade .5s ease"}}>{SPEAKING_FACTS[factIdx]}</p>
+          <div style={{display:"flex",gap:4,marginTop:12}}>
+            {SPEAKING_FACTS.map((_,i) => <div key={i} style={{width:6,height:6,borderRadius:"50%",background:i===factIdx?"#1d4ed8":"#93c5fd"}} />)}
+          </div>
+          <style>{`@keyframes factFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`}</style>
+        </div>
+
+        {/* === SNIPPET 3: TONGUE TWISTER CARD === */}
+        <div style={{background:"linear-gradient(135deg,#fce7f3,#fbcfe8)",border:"2px solid #f472b6",borderRadius:18,padding:20,marginBottom:20,minHeight:140,textAlign:"center"}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#be185d",textTransform:"uppercase",letterSpacing:.5,marginBottom:8}}>👅 Tongue Twister Challenge</div>
+          <p style={{fontSize:18,fontWeight:900,color:"#831843",lineHeight:1.4,margin:"10px 0 14px",animation:twisterWiggle?"wiggleBig .5s ease":"none"}}>"{TONGUE_TWISTERS[twisterIdx]}"</p>
+          <button onClick={newTwister} style={{padding:"9px 18px",border:"none",borderRadius:999,background:"#be185d",color:"#fff",fontFamily:"inherit",fontSize:13,fontWeight:800,cursor:"pointer",boxShadow:"0 3px 10px rgba(190,24,93,.3)"}}>🎲 New Twister</button>
+          <p style={{fontSize:10,color:"#9d174d",marginTop:8,fontWeight:600}}>Try saying it 3 times fast!</p>
+          <style>{`@keyframes wiggleBig{0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg) scale(1.05)}75%{transform:rotate(3deg) scale(1.05)}}`}</style>
+        </div>
+
+        {/* === SNIPPET 4: WORD OF THE DAY CARD === */}
+        <div style={{background:"linear-gradient(135deg,#fef3c7,#fde68a)",border:"2px solid #f59e0b",borderRadius:18,padding:20,marginBottom:20}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#b45309",textTransform:"uppercase",letterSpacing:.5,marginBottom:8}}>📖 Word of the Day</div>
+          <div style={{display:"flex",alignItems:"baseline",gap:12,flexWrap:"wrap",marginBottom:6}}>
+            <h3 style={{fontSize:30,fontWeight:900,color:"#92400e"}}>{wod.w}</h3>
+            <span style={{fontSize:11,fontWeight:700,color:"#b45309"}}>say it out loud! 🎤</span>
+          </div>
+          <p style={{fontSize:14,fontWeight:600,color:"#78350f",lineHeight:1.5}}>{wod.d}</p>
+          <p style={{fontSize:13,fontStyle:"italic",color:"#a16207",marginTop:8,lineHeight:1.5}}>"{wod.ex}"</p>
+        </div>
+
+        {/* === SNIPPET 5: BOTTOM LOGIN CTA === */}
+        <div style={{textAlign:"center",padding:"20px 0 40px"}}>
+          <button onClick={handleLoginWithConfetti} style={{padding:"14px 36px",border:"none",borderRadius:999,background:"linear-gradient(135deg,#3da33d,#1b7a1b)",color:"#fff",fontFamily:"inherit",fontSize:16,fontWeight:800,cursor:"pointer",boxShadow:"0 6px 20px rgba(27,122,27,.3)"}}>
+            🚀 Login to Join the Fun!
+          </button>
+          <p style={{marginTop:10,fontSize:11,color:"#6b7280",fontWeight:600}}>MinTos members only · Contact your club admin for access</p>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 // ===== LOGIN SCREEN =====
 // Now only renders the login card. The welcome/intro banner lives on HomePage.
 // Pass `onBack` to let users return to the home page without logging in.
