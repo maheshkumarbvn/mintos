@@ -870,23 +870,44 @@ return (
 function LandingPage({onLoginClick}) {
 
   // === SNIPPET 2: DID YOU KNOW (state) ===
-  const SPEAKING_FACTS = [
-    "🧠 Your brain LOVES it when you speak out loud — it remembers things 50% better!",
-    "🦋 Even superheroes get butterflies before speaking. The trick? Take a deep breath and smile!",
-    "👂 Great speakers are great listeners first. Ears before mouth!",
-    "🎤 The shortest famous speech ever was just 272 words long — the Gettysburg Address!",
-    "😀 Smiling while you speak actually makes your voice sound friendlier — even on the phone!",
-    "🐢 Speaking SLOWER makes you sound MORE confident, not less. Try it!",
-    "✋ Using your hands when you speak helps your brain find the right words faster.",
-    "🌟 Every great speaker was once a beginner who was brave enough to try.",
-    "🎭 Pretending to be confident actually makes you BECOME confident — fake it till you make it!",
-    "📚 Reading out loud for 10 minutes a day can make you a better speaker in just one month."
-  ];
-  const [factIdx, setFactIdx] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setFactIdx(i => (i + 1) % SPEAKING_FACTS.length), 10000);
-    return () => clearInterval(id);
-  }, []);
+const SPEAKING_FACTS = [
+  "🧠 Your brain LOVES it when you speak out loud — it remembers things 50% better!",
+  "🦋 Even superheroes get butterflies before speaking. The trick? Take a deep breath and smile!",
+  "👂 Great speakers are great listeners first. Ears before mouth!",
+  "🎤 The shortest famous speech ever was just 272 words long — the Gettysburg Address!",
+  "😀 Smiling while you speak actually makes your voice sound friendlier — even on the phone!",
+  "🐢 Speaking SLOWER makes you sound MORE confident, not less. Try it!",
+  "✋ Using your hands when you speak helps your brain find the right words faster.",
+  "🌟 Every great speaker was once a beginner who was brave enough to try.",
+  "🎭 Pretending to be confident actually makes you BECOME confident — fake it till you make it!",
+  "📚 Reading out loud for 10 minutes a day can make you a better speaker in just one month."
+];
+const [factIdx, setFactIdx] = useState(0);
+useEffect(() => {
+  const id = setInterval(() => setFactIdx(i => (i + 1) % SPEAKING_FACTS.length), 10000);
+  return () => clearInterval(id);
+}, [factIdx]); // reset timer on any change (auto or manual)
+
+const goPrev = () => setFactIdx(i => (i - 1 + SPEAKING_FACTS.length) % SPEAKING_FACTS.length);
+const goNext = () => setFactIdx(i => (i + 1) % SPEAKING_FACTS.length);
+
+const arrowBtnStyle = {
+  width:28,
+  height:28,
+  borderRadius:"50%",
+  border:"none",
+  background:"#1d4ed8",
+  color:"#fff",
+  fontSize:14,
+  fontWeight:800,
+  cursor:"pointer",
+  display:"flex",
+  alignItems:"center",
+  justifyContent:"center",
+  padding:0,
+  lineHeight:1,
+  transition:"background .2s, transform .15s"
+};
 
   // === SNIPPET 3: TONGUE TWISTER (state) ===
   const TONGUE_TWISTERS = [
@@ -990,14 +1011,53 @@ function LandingPage({onLoginClick}) {
         </div>
 
         {/* === SNIPPET 2: DID YOU KNOW CARD === */}
-        <div style={{background:"linear-gradient(135deg,#dbeafe,#bfdbfe)",border:"2px solid #60a5fa",borderRadius:18,padding:20,marginBottom:20,minHeight:140,position:"relative",overflow:"hidden"}}>
-          <div style={{fontSize:11,fontWeight:800,color:"#1d4ed8",textTransform:"uppercase",letterSpacing:.5,marginBottom:8}}>💡 Did You Know?</div>
-          <p key={factIdx} style={{fontSize:15,fontWeight:700,color:"#1e3a8a",lineHeight:1.5,animation:"factFade .5s ease"}}>{SPEAKING_FACTS[factIdx]}</p>
-          <div style={{display:"flex",gap:4,marginTop:12}}>
-            {SPEAKING_FACTS.map((_,i) => <div key={i} style={{width:6,height:6,borderRadius:"50%",background:i===factIdx?"#1d4ed8":"#93c5fd"}} />)}
-          </div>
-          <style>{`@keyframes factFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`}</style>
-        </div>
+<div style={{background:"linear-gradient(135deg,#dbeafe,#bfdbfe)",border:"2px solid #60a5fa",borderRadius:18,padding:20,marginBottom:20,minHeight:140,position:"relative",overflow:"hidden"}}>
+  <div style={{fontSize:11,fontWeight:800,color:"#1d4ed8",textTransform:"uppercase",letterSpacing:.5,marginBottom:8}}>💡 Did You Know?</div>
+  <p key={factIdx} style={{fontSize:15,fontWeight:700,color:"#1e3a8a",lineHeight:1.5,animation:"factFade .5s ease"}}>{SPEAKING_FACTS[factIdx]}</p>
+
+  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:12,gap:8}}>
+    <button
+      onClick={goPrev}
+      aria-label="Previous fact"
+      style={arrowBtnStyle}
+      onMouseDown={e => e.currentTarget.style.transform="scale(.9)"}
+      onMouseUp={e => e.currentTarget.style.transform="scale(1)"}
+      onMouseLeave={e => e.currentTarget.style.transform="scale(1)"}
+    >‹</button>
+
+    <div style={{display:"flex",gap:6,alignItems:"center",flex:1,justifyContent:"center"}}>
+      {SPEAKING_FACTS.map((_,i) => (
+        <button
+          key={i}
+          onClick={() => setFactIdx(i)}
+          aria-label={`Go to fact ${i+1}`}
+          style={{
+            width:10,
+            height:10,
+            borderRadius:"50%",
+            background:i===factIdx?"#1d4ed8":"#93c5fd",
+            border:"none",
+            padding:0,
+            cursor:"pointer",
+            transition:"background .2s, transform .2s",
+            transform:i===factIdx?"scale(1.2)":"scale(1)"
+          }}
+        />
+      ))}
+    </div>
+
+    <button
+      onClick={goNext}
+      aria-label="Next fact"
+      style={arrowBtnStyle}
+      onMouseDown={e => e.currentTarget.style.transform="scale(.9)"}
+      onMouseUp={e => e.currentTarget.style.transform="scale(1)"}
+      onMouseLeave={e => e.currentTarget.style.transform="scale(1)"}
+    >›</button>
+  </div>
+
+  <style>{`@keyframes factFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`}</style>
+</div>
 
         {/* === SNIPPET 3: TONGUE TWISTER CARD === */}
         <div style={{background:"linear-gradient(135deg,#fce7f3,#fbcfe8)",border:"2px solid #f472b6",borderRadius:18,padding:20,marginBottom:20,minHeight:140,textAlign:"center"}}>
@@ -4025,7 +4085,7 @@ root.render(<App />);
 </script>
 
 <!-- ============================================== -->
-<!-- 🎨 FUN CHARACTER LIBRARY       -->
+<!-- 🎨 FUN CHARACTER LIBRARY (with Drag Powers)     -->
 <!-- ============================================== -->
 <style>
   #funChars-container {
@@ -4041,6 +4101,22 @@ root.render(<App />);
     box-shadow: 0 8px 25px rgba(124,58,237,0.3);
     transition: all 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55);
     font-family: 'Comic Sans MS', sans-serif;
+    /* Drag-related */
+    touch-action: none;
+    will-change: transform, left, top;
+  }
+  /* When user is actively dragging, kill the transition so movement is 1:1 buttery */
+  #funChars-container.fc-dragging {
+    transition: none !important;
+    cursor: grabbing !important;
+    box-shadow: 0 12px 35px rgba(124,58,237,0.5);
+  }
+  /* Snap-to-corner bounce */
+  #funChars-container.fc-snapping {
+    transition: left 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                top  0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                right 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                bottom 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   #funChars-container.minimized {
     padding: 6px 10px;
@@ -4054,11 +4130,28 @@ root.render(<App />);
     align-items: center;
     margin-bottom: 8px;
     gap: 10px;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
   }
+  #funChars-header:active { cursor: grabbing; }
+  #funChars-container.minimized #funChars-header { margin-bottom: 0; }
+
   #funChars-title {
     font-weight: bold;
     color: #6d28d9;
     font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  #funChars-title::before {
+    content: "⋮⋮";
+    color: #a78bfa;
+    font-size: 12px;
+    letter-spacing: -2px;
+    margin-right: 4px;
+    opacity: 0.7;
   }
   #funChars-toggle {
     background: #a78bfa;
@@ -4090,6 +4183,47 @@ root.render(<App />);
     display: inline-block;
   }
   .funChar:hover { filter: brightness(1.1) drop-shadow(0 0 8px gold); }
+
+  /* ---------- Drag hint bubble ---------- */
+  #funChars-hint {
+    position: absolute;
+    top: -34px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #6d28d9;
+    color: white;
+    padding: 5px 12px;
+    border-radius: 14px;
+    font-size: 12px;
+    font-family: 'Comic Sans MS', sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  }
+  #funChars-hint::after {
+    content: "";
+    position: absolute;
+    bottom: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid #6d28d9;
+  }
+  #funChars-hint.show { opacity: 1; }
+
+  /* Gentle wiggle cue to invite dragging */
+  @keyframes fc-cue-wiggle {
+    0%,100% { transform: rotate(0deg); }
+    25%     { transform: rotate(-1.5deg); }
+    75%     { transform: rotate(1.5deg); }
+  }
+  #funChars-container.fc-cue {
+    animation: fc-cue-wiggle 0.5s ease-in-out 2;
+  }
 
   /* ---------- Animations ---------- */
   @keyframes fc-bounce {
@@ -4155,6 +4289,7 @@ root.render(<App />);
 </style>
 
 <div id="funChars-container">
+  <div id="funChars-hint">✨ Drag me anywhere!</div>
   <div id="funChars-header">
     <span id="funChars-title">🎭 Fun Friends</span>
     <button id="funChars-toggle" title="Minimize/Maximize">−</button>
@@ -4165,8 +4300,6 @@ root.render(<App />);
 <script>
 (function() {
   // ============ CHARACTER SVG DEFINITIONS ============
-  // Each character is a function returning SVG string.
-  // Props: hat, balloon, skateboard, wand, bowtie, glasses
   const PROPS = {
     hat: `<g><ellipse cx="40" cy="18" rx="22" ry="3" fill="#7c2d12"/><rect x="28" y="4" width="24" height="16" rx="2" fill="#dc2626"/><rect x="28" y="14" width="24" height="4" fill="#fbbf24"/></g>`,
     balloon: `<g class="fc-prop-balloon"><line x1="70" y1="40" x2="72" y2="75" stroke="#555" stroke-width="1.5"/><ellipse cx="70" cy="30" rx="10" ry="13" fill="#ef4444"/><ellipse cx="67" cy="26" rx="3" ry="4" fill="#fca5a5"/><polygon points="68,42 72,42 70,46" fill="#ef4444"/></g>`,
@@ -4176,7 +4309,6 @@ root.render(<App />);
     glasses: `<g><circle cx="32" cy="38" r="6" fill="none" stroke="#111" stroke-width="2"/><circle cx="48" cy="38" r="6" fill="none" stroke="#111" stroke-width="2"/><line x1="38" y1="38" x2="42" y2="38" stroke="#111" stroke-width="2"/></g>`
   };
 
-  // Characters: each takes an optional prop key
   const CHARACTERS = {
     bunny: (prop) => `
       <svg width="80" height="120" viewBox="0 0 80 120">
@@ -4339,22 +4471,18 @@ root.render(<App />);
   }
 
   function playAnimation(el, animName) {
-    // Clear old animations
     ANIMATIONS.forEach(a => el.classList.remove('fc-anim-' + a));
     el.classList.remove('fc-idle');
-    void el.offsetWidth; // reflow
+    void el.offsetWidth;
 
-    // Random speed (0.5x to 1.5x)
     const speed = (0.5 + Math.random()).toFixed(2);
     el.style.animationDuration = '';
     el.classList.add('fc-anim-' + animName);
-    // Override with random speed via inline
     const base = getComputedStyle(el).animationDuration;
     el.style.animationDuration = (parseFloat(base) / speed) + 's';
 
     showSparkle(el);
 
-    // Return to idle after animation
     const handler = () => {
       el.classList.remove('fc-anim-' + animName);
       el.style.animationDuration = '';
@@ -4368,9 +4496,10 @@ root.render(<App />);
     const wrapper = document.createElement('div');
     wrapper.className = 'funChar fc-idle';
     wrapper.innerHTML = CHARACTERS[name](prop);
-    // Random idle speed
     wrapper.style.animationDuration = (1.5 + Math.random() * 1.5).toFixed(2) + 's';
-    wrapper.addEventListener('click', () => {
+    wrapper.addEventListener('click', (e) => {
+      // Don't trigger animation if a drag just happened
+      if (window.__fcJustDragged) return;
       playAnimation(wrapper, rand(ANIMATIONS));
     });
     return wrapper;
@@ -4388,18 +4517,325 @@ root.render(<App />);
     }
   }
 
-  // Minimize/maximize
+  // ============ DOM REFS ============
   const container = document.getElementById('funChars-container');
+  const header    = document.getElementById('funChars-header');
   const toggleBtn = document.getElementById('funChars-toggle');
+  const hint      = document.getElementById('funChars-hint');
+
+  // ============ MINIMIZE / MAXIMIZE ============
   let minimized = false;
-  toggleBtn.addEventListener('click', () => {
-    minimized = !minimized;
+  function setMinimized(state) {
+    minimized = state;
     container.classList.toggle('minimized', minimized);
     toggleBtn.textContent = minimized ? '+' : '−';
     toggleBtn.title = minimized ? 'Show characters' : 'Hide characters';
+  }
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setMinimized(!minimized);
+    // After toggle, re-clamp position so it doesn't overflow
+    requestAnimationFrame(clampToViewport);
   });
 
-  // Auto-wiggle occasionally to feel alive
+  // ============ DRAG SYSTEM ============
+  const STORAGE_KEY = 'funChars.position.v1';
+  const SNAP_DISTANCE = 60;       // px from corner to snap
+  const EDGE_MAGNET   = 25;       // px from edge to magnetically pull
+  const DOCK_DISTANCE = 8;        // px from edge to auto-minimize
+  const KEY_STEP      = 20;       // arrow key movement px
+
+  let dragging = false;
+  let startX = 0, startY = 0;
+  let startLeft = 0, startTop = 0;
+  let rafId = null;
+  let pendingX = 0, pendingY = 0;
+  let movedDistance = 0;
+  window.__fcJustDragged = false;
+
+  function getRect() { return container.getBoundingClientRect(); }
+
+  // Convert any anchoring (right/bottom) to pure left/top so dragging works uniformly
+  function normalizeToLeftTop() {
+    const r = getRect();
+    container.style.left = r.left + 'px';
+    container.style.top  = r.top  + 'px';
+    container.style.right  = 'auto';
+    container.style.bottom = 'auto';
+  }
+
+  function clampToViewport() {
+    const r = getRect();
+    const maxLeft = window.innerWidth  - r.width;
+    const maxTop  = window.innerHeight - r.height;
+    let left = parseFloat(container.style.left);
+    let top  = parseFloat(container.style.top);
+    if (isNaN(left) || isNaN(top)) return;
+    left = Math.max(0, Math.min(left, maxLeft));
+    top  = Math.max(0, Math.min(top,  maxTop));
+    container.style.left = left + 'px';
+    container.style.top  = top  + 'px';
+  }
+
+  function savePosition() {
+    try {
+      const r = getRect();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        left: r.left, top: r.top, minimized
+      }));
+    } catch(e) {}
+  }
+
+  function loadPosition() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      const pos = JSON.parse(raw);
+      if (typeof pos.minimized === 'boolean') setMinimized(pos.minimized);
+      // Apply position
+      container.style.right = 'auto';
+      container.style.bottom = 'auto';
+      container.style.left = pos.left + 'px';
+      container.style.top  = pos.top  + 'px';
+      requestAnimationFrame(clampToViewport);
+      return true;
+    } catch(e) { return false; }
+  }
+
+  function resetToDefault() {
+    container.classList.add('fc-snapping');
+    container.style.left = 'auto';
+    container.style.top  = 'auto';
+    container.style.right  = '20px';
+    container.style.bottom = '20px';
+    try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
+    setTimeout(() => container.classList.remove('fc-snapping'), 500);
+  }
+
+  // Magnetic snap: corners snap, edges pull
+  function snapAndDock(left, top) {
+    const r = getRect();
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const right  = W - (left + r.width);
+    const bottom = H - (top + r.height);
+
+    // Distance to each corner
+    const corners = [
+      { name: 'tl', dx: left,  dy: top,    nl: 20,           nt: 20 },
+      { name: 'tr', dx: right, dy: top,    nl: W - r.width - 20, nt: 20 },
+      { name: 'bl', dx: left,  dy: bottom, nl: 20,           nt: H - r.height - 20 },
+      { name: 'br', dx: right, dy: bottom, nl: W - r.width - 20, nt: H - r.height - 20 },
+    ];
+    let snapped = null;
+    let bestDist = Infinity;
+    corners.forEach(c => {
+      const d = Math.hypot(c.dx, c.dy);
+      if (d < SNAP_DISTANCE && d < bestDist) {
+        bestDist = d;
+        snapped = c;
+      }
+    });
+
+    if (snapped) {
+      container.classList.add('fc-snapping');
+      container.style.left = snapped.nl + 'px';
+      container.style.top  = snapped.nt + 'px';
+      setTimeout(() => container.classList.remove('fc-snapping'), 500);
+      return { left: snapped.nl, top: snapped.nt, edge: true };
+    }
+
+    // Edge magnetic pull (no corner)
+    let nl = left, nt = top, pulled = false;
+    if (left   < EDGE_MAGNET) { nl = 10; pulled = true; }
+    if (right  < EDGE_MAGNET) { nl = W - r.width - 10; pulled = true; }
+    if (top    < EDGE_MAGNET) { nt = 10; pulled = true; }
+    if (bottom < EDGE_MAGNET) { nt = H - r.height - 10; pulled = true; }
+
+    if (pulled) {
+      container.classList.add('fc-snapping');
+      container.style.left = nl + 'px';
+      container.style.top  = nt + 'px';
+      setTimeout(() => container.classList.remove('fc-snapping'), 500);
+      return { left: nl, top: nt, edge: true };
+    }
+
+    return { left, top, edge: false };
+  }
+
+  // Dock mode: auto-minimize when very close to an edge
+  function maybeDock(left, top) {
+    const r = getRect();
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const nearEdge =
+      left < DOCK_DISTANCE ||
+      top  < DOCK_DISTANCE ||
+      (W - (left + r.width))  < DOCK_DISTANCE ||
+      (H - (top  + r.height)) < DOCK_DISTANCE;
+    if (nearEdge && !minimized) setMinimized(true);
+  }
+
+  // --- pointer-driven drag (covers mouse + touch + pen) ---
+  function onPointerDown(e) {
+    // Ignore the toggle button
+    if (e.target.closest('#funChars-toggle')) return;
+    // Only primary button for mouse
+    if (e.button !== undefined && e.button !== 0) return;
+
+    normalizeToLeftTop();
+    container.classList.remove('fc-snapping');
+    dragging = true;
+    movedDistance = 0;
+    window.__fcJustDragged = false;
+
+    const r = getRect();
+    startLeft = r.left;
+    startTop  = r.top;
+    startX = e.clientX;
+    startY = e.clientY;
+
+    container.classList.add('fc-dragging');
+    hideHint();
+
+    try { header.setPointerCapture(e.pointerId); } catch(_) {}
+    e.preventDefault();
+  }
+
+  function onPointerMove(e) {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    movedDistance = Math.max(movedDistance, Math.hypot(dx, dy));
+
+    pendingX = startLeft + dx;
+    pendingY = startTop  + dy;
+
+    // Hard boundary protection during drag
+    const r = getRect();
+    pendingX = Math.max(0, Math.min(pendingX, window.innerWidth  - r.width));
+    pendingY = Math.max(0, Math.min(pendingY, window.innerHeight - r.height));
+
+    if (rafId == null) {
+      rafId = requestAnimationFrame(() => {
+        container.style.left = pendingX + 'px';
+        container.style.top  = pendingY + 'px';
+        rafId = null;
+      });
+    }
+  }
+
+  function onPointerUp(e) {
+    if (!dragging) return;
+    dragging = false;
+    container.classList.remove('fc-dragging');
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+
+    // Was this an actual drag (not just a click)?
+    const wasDrag = movedDistance > 4;
+    if (wasDrag) {
+      window.__fcJustDragged = true;
+      // Snap + dock
+      const r = getRect();
+      const result = snapAndDock(r.left, r.top);
+      maybeDock(result.left, result.top);
+      savePosition();
+      // Reset the "just dragged" flag shortly so future clicks work
+      setTimeout(() => { window.__fcJustDragged = false; }, 50);
+    }
+
+    try { header.releasePointerCapture(e.pointerId); } catch(_) {}
+  }
+
+  header.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup',   onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  // Double-click header to reset
+  header.addEventListener('dblclick', (e) => {
+    if (e.target.closest('#funChars-toggle')) return;
+    resetToDefault();
+  });
+
+  // ============ KEYBOARD ARROW MOVEMENT ============
+  // Make header focusable for accessibility
+  header.setAttribute('tabindex', '0');
+  header.setAttribute('role', 'button');
+  header.setAttribute('aria-label', 'Drag handle for Fun Friends. Use arrow keys to move, double-click to reset.');
+
+  header.addEventListener('keydown', (e) => {
+    const keys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
+    if (!keys.includes(e.key)) return;
+    e.preventDefault();
+
+    normalizeToLeftTop();
+    const r = getRect();
+    let left = r.left;
+    let top  = r.top;
+    const step = e.shiftKey ? KEY_STEP * 3 : KEY_STEP;
+
+    if (e.key === 'ArrowLeft')  left -= step;
+    if (e.key === 'ArrowRight') left += step;
+    if (e.key === 'ArrowUp')    top  -= step;
+    if (e.key === 'ArrowDown')  top  += step;
+
+    // Boundary clamp
+    left = Math.max(0, Math.min(left, window.innerWidth  - r.width));
+    top  = Math.max(0, Math.min(top,  window.innerHeight - r.height));
+
+    container.classList.add('fc-snapping');
+    container.style.left = left + 'px';
+    container.style.top  = top  + 'px';
+    setTimeout(() => {
+      container.classList.remove('fc-snapping');
+      const result = snapAndDock(parseFloat(container.style.left), parseFloat(container.style.top));
+      maybeDock(result.left, result.top);
+      savePosition();
+    }, 250);
+  });
+
+  // Reset shortcut: Ctrl/Cmd + 0 when header focused
+  header.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      e.preventDefault();
+      resetToDefault();
+    }
+  });
+
+  // ============ WINDOW RESIZE: keep on screen ============
+  window.addEventListener('resize', () => {
+    // Only clamp if user has set a custom position
+    if (container.style.left && container.style.left !== 'auto') {
+      clampToViewport();
+      savePosition();
+    }
+  });
+
+  // ============ DRAG HINT ============
+  function showHint() {
+    hint.classList.add('show');
+    container.classList.add('fc-cue');
+    setTimeout(() => container.classList.remove('fc-cue'), 1100);
+    setTimeout(() => hint.classList.remove('show'), 3200);
+  }
+  function hideHint() {
+    hint.classList.remove('show');
+  }
+
+  // Show hint once per session unless user has already moved it
+  function maybeShowHint() {
+    try {
+      if (localStorage.getItem(STORAGE_KEY)) return; // user already dragged before
+      if (sessionStorage.getItem('funChars.hintShown')) return;
+      sessionStorage.setItem('funChars.hintShown', '1');
+      setTimeout(showHint, 1200);
+    } catch(e) {
+      setTimeout(showHint, 1200);
+    }
+  }
+
+  // ============ AUTO-WIGGLE LIFE LOOP ============
   setInterval(() => {
     if (minimized) return;
     const chars = document.querySelectorAll('.funChar');
@@ -4408,19 +4844,26 @@ root.render(<App />);
     }
   }, 4000);
 
-  // Expose API globally so other pages can call it
+  // ============ PUBLIC API ============
   window.FunChars = {
     refresh: (n) => populateStage(n || 3),
-    minimize: () => { minimized = true; container.classList.add('minimized'); toggleBtn.textContent='+'; },
-    maximize: () => { minimized = false; container.classList.remove('minimized'); toggleBtn.textContent='−'; },
+    minimize: () => setMinimized(true),
+    maximize: () => setMinimized(false),
     playRandom: () => {
       const chars = document.querySelectorAll('.funChar');
       if (chars.length) playAnimation(rand(Array.from(chars)), rand(ANIMATIONS));
-    }
+    },
+    resetPosition: resetToDefault,
+    showHint: showHint
   };
 
-  // Initial load — random characters on each page load
+  // ============ INIT ============
   populateStage(3);
+  const restored = loadPosition();
+  if (!restored) {
+    // Default bottom-right preserved; just invite the user to try dragging
+    maybeShowHint();
+  }
 })();
 </script>
 <!-- ============================================== -->
